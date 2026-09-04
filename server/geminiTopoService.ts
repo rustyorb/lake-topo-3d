@@ -2,15 +2,23 @@ import { GoogleGenAI } from '@google/genai';
 import { GroundingSource, LakeMetadata, TopoFeature } from '../src/types.js';
 import { PredefinedLake } from './lakeData.js';
 
+// Model IDs are overridable because Google rotates them; see README.
+const RECON_MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash';
+const LITE_MODEL = process.env.GEMINI_LITE_MODEL || 'gemini-3.1-flash-lite';
+
 let geminiClient: GoogleGenAI | null = null;
 function getGemini(): GoogleGenAI | null {
-  if (!geminiClient && process.env.GEMINI_API_KEY) {
+  if (!geminiClient && process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'MY_GEMINI_API_KEY') {
     geminiClient = new GoogleGenAI({
       apiKey: process.env.GEMINI_API_KEY,
-      httpOptions: { headers: { 'User-Agent': 'aistudio-midwest-lakes-3d' } },
+      httpOptions: { headers: { 'User-Agent': 'lake-topo-3d' } },
     });
   }
   return geminiClient;
+}
+
+export function geminiAvailable(): boolean {
+  return getGemini() !== null;
 }
 
 export interface AiTopoReconResult {
@@ -38,7 +46,7 @@ export async function performAiTopoRecon(
   let isSearchGrounded = false;
   let rawSearchText = '';
 
-  // 1. Attempt Search Grounding with Gemini 3.8-Flash
+  // 1. Attempt Google Search grounding
   try {
     const searchPrompt = `Search for the official DNR (Department of Natural Resources) bathymetric survey map, hydrographic survey, and USGS 7.5-minute topographic quadrangle for "${query}".
 Find:
@@ -52,7 +60,7 @@ Find:
 ${guidanceText}`;
 
     const searchResponse = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
+      model: RECON_MODEL,
       contents: searchPrompt,
       config: {
         tools: [{ googleSearch: {} }],
@@ -78,7 +86,7 @@ ${guidanceText}`;
     }
   } catch (err: any) {
     // 429 Resource exhausted or quota limit: proceed to direct limnological synthesis
-    console.warn('Google Search Grounding skipped or quota limited, using direct hydrographic synthesis:', err.message || err);
+    console.warn('[gemini] search grounding unavailable, falling back to unsupported synthesis:', err.message || err);
   }
 
   // 2. Synthesize Structured Topographic & Bathymetric Map Parameters
@@ -141,9 +149,8 @@ Respond ONLY with valid JSON in this exact structure:
   ]
 }`;
 
-    // Use gemini-3.1-flash-lite for reliable structured output without quota limits
     const response = await ai.models.generateContent({
-      model: 'gemini-3.1-flash-lite',
+      model: LITE_MODEL,
       contents: synthesisPrompt,
       config: {
         responseMimeType: 'application/json',
@@ -224,7 +231,8 @@ Respond ONLY with valid JSON in this exact structure:
       sources: finalSources,
       topoFeatures,
       contourIntervalFt: Number(data.contourIntervalFt) || 5,
-      generationMethod: isSearchGrounded ? 'ai-search-grounded' : 'ai-search-grounded',
+      generationMethod: isSearchGrounded ? 'ai-search-grounded' : 'ai-synthesis',
+      depthIsEstimated: !isSearchGrounded,
       topoAnalysisNotes: data.topoAnalysisNotes || 'Topographic contours and bathymetric profiles derived from DNR and USGS survey data.',
     };
 
@@ -316,7 +324,7 @@ Respond ONLY with valid JSON matching:
     const cleanBase64 = imageBase64.replace(/^data:image\/\w+;base64,/, '');
 
     const response = await ai.models.generateContent({
-      model: 'gemini-3.1-flash-lite',
+      model: LITE_MODEL,
       contents: [
         {
           inlineData: {
@@ -377,6 +385,7 @@ Respond ONLY with valid JSON matching:
       topoFeatures,
       contourIntervalFt: Number(data.contourIntervalFt) || 5,
       generationMethod: 'ai-topo-vision',
+      depthIsEstimated: false,
       topoAnalysisNotes: data.topoAnalysisNotes || 'Contours and soundings traced directly from uploaded map image.',
     };
 

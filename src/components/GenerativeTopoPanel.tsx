@@ -1,22 +1,17 @@
 import React, { useState, useRef } from 'react';
-import { 
-  Sparkles, 
-  Search, 
-  Upload, 
-  Map, 
-  Layers, 
-  CheckCircle2, 
-  RefreshCw, 
-  FileText, 
+import {
+  Sparkles,
+  Search,
+  Upload,
+  Layers,
+  RefreshCw,
   ExternalLink,
-  ShieldCheck,
-  HelpCircle,
   Image as ImageIcon,
-  Sliders,
   ChevronRight,
   Send
 } from 'lucide-react';
 import { TerrainGridData } from '../types.js';
+import { describeMethod } from '../lib/labels.js';
 
 interface GenerativeTopoPanelProps {
   gridData: TerrainGridData;
@@ -87,23 +82,17 @@ export const GenerativeTopoPanel: React.FC<GenerativeTopoPanelProps> = ({
             <Sparkles className="w-4 h-4" />
           </div>
           <div>
-            <h3 className="text-sm font-semibold text-white">Generative Topo Map Engine</h3>
+            <h3 className="text-sm font-semibold text-white">Depth & Survey Enrichment</h3>
             <p className="text-[11px] text-slate-400">
-              Web search & hydrographic contour survey synthesis
+              Gemini recon for max depth, geology and landmarks (optional)
             </p>
           </div>
         </div>
 
         {/* Method Badge */}
         <div className="flex items-center space-x-1.5 px-2.5 py-1 rounded-full bg-slate-800 border border-slate-700 text-[11px]">
-          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-          <span className="font-medium text-slate-300 capitalize">
-            {metadata.generationMethod === 'ai-search-grounded'
-              ? 'Search Grounded'
-              : metadata.generationMethod === 'ai-topo-vision'
-              ? 'Optical Topo Vision'
-              : 'DNR / USGS Survey'}
-          </span>
+          <span className={`w-2 h-2 rounded-full ${metadata.generationMethod === 'heuristic' || metadata.generationMethod === 'ai-synthesis' ? 'bg-amber-400' : 'bg-emerald-400'}`}></span>
+          <span className="font-medium text-slate-300">{describeMethod(metadata.generationMethod)}</span>
         </div>
       </div>
 
@@ -148,7 +137,9 @@ export const GenerativeTopoPanel: React.FC<GenerativeTopoPanelProps> = ({
       {activeTab === 'recon' && (
         <div className="space-y-3">
           <p className="text-xs text-slate-300 leading-relaxed">
-            The AI queries official DNR hydrographic records, USGS 7.5-minute quadrangles, and limnological surveys to generatively reconstruct the lakebed contours, depth soundings, dams, and feeder creeks.
+            Shoreline and land elevation already come from real map data. AI recon asks Gemini (with Google Search when available) for the
+            lake's surveyed max depth, mean depth, geology and named landmarks, then rescales the bathymetry to that depth. Results without
+            search grounding are flagged as unverified.
           </p>
 
           <form onSubmit={handleRunRecon} className="space-y-2">
@@ -183,7 +174,7 @@ export const GenerativeTopoPanel: React.FC<GenerativeTopoPanelProps> = ({
               ) : (
                 <>
                   <Sparkles className="w-3.5 h-3.5" />
-                  <span>Re-determine via AI Topo Map Recon</span>
+                  <span>Run AI depth & survey recon</span>
                 </>
               )}
             </button>
@@ -193,7 +184,7 @@ export const GenerativeTopoPanel: React.FC<GenerativeTopoPanelProps> = ({
           {metadata.sources && metadata.sources.length > 0 && (
             <div className="pt-2 border-t border-slate-800/80">
               <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block mb-1.5">
-                Verified Hydrographic Citations ({metadata.sources.length})
+                Data sources ({metadata.sources.length})
               </span>
               <div className="space-y-1">
                 {metadata.sources.map((src, i) => (
@@ -222,7 +213,8 @@ export const GenerativeTopoPanel: React.FC<GenerativeTopoPanelProps> = ({
       {activeTab === 'upload' && (
         <div className="space-y-3">
           <p className="text-xs text-slate-300">
-            Upload any image of a Topographic Map (USGS 7.5' Quad) or DNR Bathymetric Chart. Gemini Vision will read the visual contour lines, depth markings, shoreline boundary, and dam coordinates to construct the 3D model.
+            Upload a DNR bathymetric chart or USGS quad image. Gemini Vision reads the depth markings and metadata; the shoreline still comes
+            from OpenStreetMap when the lake name can be matched. Requires a server-side GEMINI_API_KEY.
           </p>
 
           <input
@@ -249,7 +241,7 @@ export const GenerativeTopoPanel: React.FC<GenerativeTopoPanelProps> = ({
           {/* Preset Sample Topo Charts */}
           <div>
             <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block mb-1.5">
-              Or load surveyed Midwestern topo charts:
+              Or run recon with survey notes for a curated lake:
             </span>
             <div className="space-y-1.5">
               {SAMPLE_TOPO_CHARTS.map((sample, idx) => (
@@ -300,7 +292,7 @@ export const GenerativeTopoPanel: React.FC<GenerativeTopoPanelProps> = ({
           {metadata.topoFeatures && metadata.topoFeatures.length > 0 && (
             <div className="space-y-1.5">
               <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">
-                Extracted Hydrographic Stations ({metadata.topoFeatures.length})
+                Landmarks ({metadata.topoFeatures.length})
               </span>
               <div className="max-h-48 overflow-y-auto space-y-1 pr-1">
                 {metadata.topoFeatures.map((feat, i) => (

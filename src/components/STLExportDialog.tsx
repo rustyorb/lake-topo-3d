@@ -1,22 +1,21 @@
 import React, { useState, useMemo } from 'react';
 import { TerrainGridData, STLOptions } from '../types.js';
-import { 
-  generateWatertightSTLMesh, 
-  exportToBinarySTL, 
-  exportToAsciiSTL, 
-  downloadBlob 
+import {
+  generateWatertightSTLMesh,
+  exportToBinarySTL,
+  exportToAsciiSTL,
+  downloadBlob,
+  suggestExaggeration,
 } from '../utils/stlExporter.js';
-import { 
-  Download, 
-  X, 
-  Printer, 
-  Sliders, 
-  CheckCircle2, 
-  Layers, 
-  Box, 
-  AlertCircle,
+import {
+  Download,
+  X,
+  Printer,
+  Sliders,
+  CheckCircle2,
+  Layers,
+  Box,
   FileCode2,
-  Sparkles
 } from 'lucide-react';
 
 interface STLExportDialogProps {
@@ -34,7 +33,7 @@ export const STLExportDialog: React.FC<STLExportDialogProps> = ({
 }) => {
   const [targetWidthMm, setTargetWidthMm] = useState<number>(120);
   const [baseThicknessMm, setBaseThicknessMm] = useState<number>(4);
-  const [verticalExaggeration, setVerticalExaggeration] = useState<number>(currentExaggeration || 2.2);
+  const [verticalExaggeration, setVerticalExaggeration] = useState<number>(currentExaggeration || 3);
   const [includeWaterCap, setIncludeWaterCap] = useState<boolean>(false);
   const [terraceContours, setTerraceContours] = useState<boolean>(false);
   const [terraceStepFt, setTerraceStepFt] = useState<number>(5);
@@ -54,7 +53,9 @@ export const STLExportDialog: React.FC<STLExportDialogProps> = ({
       terraceStepFt,
     };
     return generateWatertightSTLMesh(gridData, opts);
-  }, [gridData, targetWidthMm, baseThicknessMm, verticalExaggeration, includeWaterCap, format, terraceContours, terraceStepFt]);
+  }, [gridData, targetWidthMm, baseThicknessMm, verticalExaggeration, includeWaterCap, terraceContours, terraceStepFt]);
+
+  const trueScale = Math.round(1000 / meshPreview.stats.mmPerMetreHorizontal);
 
   if (!isOpen) return null;
 
@@ -66,7 +67,7 @@ export const STLExportDialog: React.FC<STLExportDialogProps> = ({
       try {
         const lakeSlug = gridData.metadata.name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
         const stateSlug = gridData.metadata.state.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-        const filename = `${lakeSlug}-${stateSlug}-3d-topo.stl`;
+        const filename = `${lakeSlug}-${stateSlug}-${targetWidthMm}mm-${verticalExaggeration.toFixed(1)}x.stl`;
 
         let blob: Blob;
         if (format === 'binary') {
@@ -180,15 +181,22 @@ export const STLExportDialog: React.FC<STLExportDialogProps> = ({
             <input
               type="range"
               min={1.0}
-              max={4.0}
+              max={25.0}
               step={0.1}
               value={verticalExaggeration}
               onChange={(e) => setVerticalExaggeration(Number(e.target.value))}
               className="w-full accent-amber-500 cursor-pointer"
             />
-            <p className="text-[11px] text-slate-400 mt-1">
-              Midwestern topography is naturally subtle; 2.0x–3.0x makes shoreline bluffs and kettle depressions tactually distinct on 3D prints.
-            </p>
+            <div className="flex items-center justify-between text-[11px] text-slate-400 mt-1">
+              <span>1.0x is true scale (horizontal 1:{trueScale.toLocaleString()}). This lake's relief prints at {meshPreview.stats.reliefMm} mm.</span>
+              <button
+                type="button"
+                onClick={() => setVerticalExaggeration(suggestExaggeration(gridData, targetWidthMm))}
+                className="shrink-0 ml-2 text-amber-400 hover:text-amber-300 underline decoration-dotted cursor-pointer"
+              >
+                auto-fit
+              </button>
+            </div>
           </div>
 
           {/* Lake Bed vs Water Cap Style */}
@@ -306,6 +314,12 @@ export const STLExportDialog: React.FC<STLExportDialogProps> = ({
               </span>
             </div>
             <div className="flex items-center justify-between text-slate-300">
+              <span className="text-slate-400">Terrain relief / scale:</span>
+              <span className="font-mono font-semibold text-white">
+                {meshPreview.stats.reliefMm} mm · 1:{trueScale.toLocaleString()} horiz · 1:{Math.round(1000 / meshPreview.stats.mmPerMetreVertical).toLocaleString()} vert
+              </span>
+            </div>
+            <div className="flex items-center justify-between text-slate-300">
               <span className="text-slate-400">Watertight Triangles:</span>
               <span className="font-mono font-semibold text-white">
                 {meshPreview.stats.triangleCount.toLocaleString()} facets
@@ -319,7 +333,7 @@ export const STLExportDialog: React.FC<STLExportDialogProps> = ({
             </div>
             <div className="flex items-center gap-1.5 text-[11px] text-emerald-400 pt-1 border-t border-slate-800/80">
               <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
-              <span>100% Watertight solid mesh. Ready to drop straight into Bambu Studio, Cura, or PrusaSlicer.</span>
+              <span>Closed manifold, north = +Y, Z up. Drops straight into Bambu Studio, Cura or PrusaSlicer.</span>
             </div>
           </div>
 

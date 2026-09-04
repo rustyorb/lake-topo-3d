@@ -31,7 +31,7 @@ import { TopoMapViewer } from './components/TopoMapViewer.js';
 import { GenerativeTopoPanel } from './components/GenerativeTopoPanel.js';
 import { ColorSchemeMode, TerrainGridData, TerrainShadingStyle } from './types.js';
 import { suggestExaggeration } from './utils/stlExporter.js';
-import { describeGeometry, describeMethod } from './lib/labels.js';
+import { describeBathymetry, describeDem, describeGeometry, describeMethod } from './lib/labels.js';
 
 const POPULAR_LAKES = [
   { label: 'Deam Lake, IN', query: 'Deam Lake, Indiana' },
@@ -870,15 +870,35 @@ export default function App() {
                           <span className="font-medium text-slate-200">{describeMethod(gridData.metadata.generationMethod)}</span>
                         </div>
                         <div className="flex items-center justify-between">
-                          <span className="text-slate-400">Depths</span>
+                          <span className="text-slate-400">Bathymetry</span>
+                          <span className={`font-medium ${gridData.metadata.bathymetrySource === 'idnr-sonar' ? 'text-emerald-300' : 'text-amber-300'}`}>
+                            {describeBathymetry(gridData.metadata.bathymetrySource)}{gridData.metadata.surveyDate ? ` (${gridData.metadata.surveyDate})` : ''}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-slate-400">Elevation</span>
+                          <span className={`font-medium ${gridData.metadata.demSource === '3dep' ? 'text-emerald-300' : 'text-slate-200'}`}>{describeDem(gridData.metadata.demSource)}</span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-slate-400">Max depth</span>
                           <span className={`font-medium ${gridData.metadata.depthIsEstimated ? 'text-amber-300' : 'text-emerald-300'}`}>
-                            {gridData.metadata.depthIsEstimated ? 'Estimated from area & shape' : 'Max depth from record; shape modelled'}
+                            {gridData.metadata.depthIsEstimated ? 'Estimated from area' : 'On record'}
                           </span>
                         </div>
                         <div className="flex items-center justify-between">
                           <span className="text-slate-400">Frame</span>
                           <span className="font-mono text-slate-300">{gridData.physicalWidthKm} × {gridData.physicalHeightKm} km · {gridData.gridSize}²</span>
                         </div>
+                        {gridData.metadata.dnrPdfUrl && (
+                          <a href={gridData.metadata.dnrPdfUrl} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-emerald-400 hover:text-emerald-300">
+                            <ExternalLink className="w-3 h-3" /> Indiana DNR depth map (PDF)
+                          </a>
+                        )}
+                        {gridData.metadata.wikipediaUrl && (
+                          <a href={gridData.metadata.wikipediaUrl} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-sky-400 hover:text-sky-300">
+                            <ExternalLink className="w-3 h-3" /> Wikipedia article
+                          </a>
+                        )}
                         {gridData.metadata.osmId && (
                           <a
                             href={`https://www.openstreetmap.org/${gridData.metadata.osmId}`}
@@ -919,9 +939,9 @@ export default function App() {
       <footer className="max-w-7xl mx-auto w-full px-4 sm:px-6 pb-5 text-[10px] text-slate-500 flex flex-wrap gap-x-3 gap-y-1">
         <span>Shorelines © <a className="underline decoration-dotted hover:text-slate-300" href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap contributors</a> (ODbL)</span>
         <span>·</span>
-        <span>Elevation: <a className="underline decoration-dotted hover:text-slate-300" href="https://registry.opendata.aws/terrain-tiles/" target="_blank" rel="noopener noreferrer">Terrarium terrain tiles</a> (Mapzen / AWS Open Data)</span>
+        <span>Bathymetry: <a className="underline decoration-dotted hover:text-slate-300" href="https://www.in.gov/dnr/fish-and-wildlife/fishing/lake-depth-maps/" target="_blank" rel="noopener noreferrer">Indiana DNR Fish &amp; Wildlife</a> sonar surveys where available, else modelled from distance to shore.</span>
         <span>·</span>
-        <span>Bathymetry is modelled from distance to shore unless a survey depth is on record.</span>
+        <span>Elevation: USGS 3DEP (LiDAR) in the US, Terrarium tiles elsewhere.</span>
       </footer>
 
       {/* STL Export Modal Dialog */}

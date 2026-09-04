@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   Sparkles,
   Search,
@@ -44,7 +44,12 @@ export const GenerativeTopoPanel: React.FC<GenerativeTopoPanelProps> = ({
   onTriggerAiRecon,
   onUploadTopoImage,
 }) => {
-  const [activeTab, setActiveTab] = useState<'recon' | 'upload' | 'features'>('recon');
+  const [activeTab, setActiveTab] = useState<'recon' | 'upload' | 'features'>('features');
+  const [llm, setLlm] = useState<{ provider: string; model: string } | null>(null);
+  useEffect(() => {
+    fetch('/api/health').then((r) => r.json()).then((h) => setLlm(h.llm || null)).catch(() => setLlm(null));
+  }, []);
+  const llmOn = !!llm && llm.provider !== 'none';
   const [userPrompt, setUserPrompt] = useState<string>('');
   const [isProcessingImage, setIsProcessingImage] = useState<boolean>(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -82,9 +87,9 @@ export const GenerativeTopoPanel: React.FC<GenerativeTopoPanelProps> = ({
             <Sparkles className="w-4 h-4" />
           </div>
           <div>
-            <h3 className="text-sm font-semibold text-white">Depth & Survey Enrichment</h3>
+            <h3 className="text-sm font-semibold text-white">Sources & Enrichment</h3>
             <p className="text-[11px] text-slate-400">
-              Gemini recon for max depth, geology and landmarks (optional)
+              {llmOn ? `LLM: ${llm!.provider} / ${llm!.model}` : 'No LLM configured — sourced data only'}
             </p>
           </div>
         </div>
@@ -137,9 +142,9 @@ export const GenerativeTopoPanel: React.FC<GenerativeTopoPanelProps> = ({
       {activeTab === 'recon' && (
         <div className="space-y-3">
           <p className="text-xs text-slate-300 leading-relaxed">
-            Shoreline and land elevation already come from real map data. AI recon asks Gemini (with Google Search when available) for the
-            lake's surveyed max depth, mean depth, geology and named landmarks, then rescales the bathymetry to that depth. Results without
-            search grounding are flagged as unverified.
+            Shoreline, elevation, survey contours and Wikipedia facts are fetched first. AI recon only fills what's still missing
+            (geology, landmarks, a depth when no record exists) and is labelled unverified unless the provider cited web sources.
+            {!llmOn && ' Set LLM_PROVIDER in .env (ollama, lmstudio, openrouter, openai, anthropic, gemini) to enable it.'}
           </p>
 
           <form onSubmit={handleRunRecon} className="space-y-2">
@@ -163,18 +168,18 @@ export const GenerativeTopoPanel: React.FC<GenerativeTopoPanelProps> = ({
             <button
               type="button"
               onClick={() => handleRunRecon()}
-              disabled={isLoading}
+              disabled={isLoading || !llmOn}
               className="w-full flex items-center justify-center space-x-2 py-2 px-3 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 disabled:opacity-50 text-white font-medium text-xs rounded-lg shadow-md transition cursor-pointer"
             >
               {isLoading ? (
                 <>
                   <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                  <span>Searching USGS & DNR Topo Records...</span>
+                  <span>Running recon…</span>
                 </>
               ) : (
                 <>
                   <Sparkles className="w-3.5 h-3.5" />
-                  <span>Run AI depth & survey recon</span>
+                  <span>{llmOn ? 'Run AI recon' : 'AI recon unavailable (no provider)'}</span>
                 </>
               )}
             </button>
@@ -213,8 +218,8 @@ export const GenerativeTopoPanel: React.FC<GenerativeTopoPanelProps> = ({
       {activeTab === 'upload' && (
         <div className="space-y-3">
           <p className="text-xs text-slate-300">
-            Upload a DNR bathymetric chart or USGS quad image. Gemini Vision reads the depth markings and metadata; the shoreline still comes
-            from OpenStreetMap when the lake name can be matched. Requires a server-side GEMINI_API_KEY.
+            Upload a depth chart or topo image. The configured vision model reads the printed depths and lake name; the shoreline and
+            terrain still come from map data when the name matches. {llmOn ? '' : 'Requires an LLM provider with vision.'}
           </p>
 
           <input

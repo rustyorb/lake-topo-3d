@@ -14,6 +14,7 @@
     "check": "npm run lint && npm run verify"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.123.0",
     "@google/genai": "^2.4.0",
     "@tailwindcss/vite": "^4.1.14",
     "@vitejs/plugin-react": "^5.0.4",
@@ -39,7 +40,7 @@
     "typescript": "~5.8.2",
     "vite": "^6.2.3"
   },
-  "description": "Real shorelines + elevation \u2192 interactive 3D lake terrain, vector topo maps and watertight STL for 3D printing.",
+  "description": "Real shorelines, LiDAR terrain and surveyed bathymetry for any named lake, as an interactive 3D model, a topo map and a printable STL.",
   "engines": {
     "node": ">=20"
   }

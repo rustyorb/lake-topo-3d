@@ -11,16 +11,27 @@ export interface GroundingSource {
   title: string;
   uri?: string;
   snippet?: string;
-  sourceType?: 'dnr_survey' | 'usgs_topo' | 'web_search' | 'hydrographic_database' | 'osm' | 'dem';
+  sourceType?: 'dnr_survey' | 'usgs_topo' | 'web_search' | 'hydrographic_database' | 'osm' | 'dem' | 'wikipedia' | 'llm';
 }
 
 /** Where the descriptive metadata (depth, geology, description) came from. */
 export type GenerationMethod =
-  | 'ai-search-grounded' // Gemini with Google Search grounding succeeded
-  | 'ai-synthesis'       // Gemini answered without search grounding (model memory only)
-  | 'ai-topo-vision'     // Gemini Vision read an uploaded chart
+  | 'idnr-survey'        // Indiana DNR sonar survey record (contours, acres, date)
   | 'curated-survey'     // hand-curated entry in server/lakeData.ts
+  | 'wikipedia'          // Wikipedia infobox / Wikidata facts
+  | 'ai-search-grounded' // LLM with web-search grounding (cited sources)
+  | 'ai-synthesis'       // LLM answered from memory only (unverified)
+  | 'ai-topo-vision'     // LLM vision read an uploaded chart
   | 'heuristic';         // deterministic guess from the query string / lake size
+
+/** Where the underwater depths came from. */
+export type BathymetrySource =
+  | 'idnr-sonar'      // Indiana DNR sonar-surveyed depth contours, interpolated
+  | 'distance-model'  // distance-to-shore bowl scaled to max depth
+  | 'curated-sdf'     // hand-built Deam Lake model
+  | 'procedural';
+
+export type DemSource = '3dep' | 'terrarium' | 'synthetic';
 
 /** Where the actual terrain geometry came from. */
 export type GeometrySource =
@@ -56,6 +67,15 @@ export interface LakeMetadata {
   contourIntervalFt?: number;
   generationMethod?: GenerationMethod;
   geometrySource?: GeometrySource;
+  bathymetrySource?: BathymetrySource;
+  demSource?: DemSource;
+  /** ISO date of the bathymetric survey when known */
+  surveyDate?: string;
+  /** Indiana DNR published depth map (PDF) */
+  dnrPdfUrl?: string;
+  wikipediaUrl?: string;
+  wikidataId?: string;
+  llmProvider?: string;
   /** True when maxDepth / meanDepth are estimates rather than surveyed values. */
   depthIsEstimated?: boolean;
   topoAnalysisNotes?: string;

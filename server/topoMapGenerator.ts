@@ -159,7 +159,7 @@ export function generateSvgTopoMap(data: TerrainGridData): string {
   const shorePath = `<path d="${pathFor(shoreline)}" stroke="#0c4a6e" stroke-width="1.8" fill="none" stroke-linejoin="round"/>`;
 
   // ---- feature markers
-  const features: TopoFeature[] = metadata.topoFeatures || [];
+  const features: TopoFeature[] = (metadata.topoFeatures || []).filter((f) => Number.isFinite(f.normX) && Number.isFinite(f.normY));
   const featureElements = features
     .map((f, idx) => {
       const pt = toPixel(f.normX, f.normY);
@@ -205,13 +205,19 @@ export function generateSvgTopoMap(data: TerrainGridData): string {
   const widthM = Math.max(1, (data.physicalWidthKm || 1) * 1000);
   const scale = pickScaleBar(mapW / widthM);
   const b = metadata.bounds;
+  const demLabel = metadata.demSource === '3dep' ? 'Elevation: USGS 3DEP LiDAR DEM' : 'Elevation: Terrarium tiles (Mapzen / AWS Open Data)';
   const geometryLabel =
     metadata.geometrySource === 'osm-dem'
-      ? 'Shoreline © OpenStreetMap contributors (ODbL) · Elevation: Terrarium tiles (Mapzen / AWS Open Data)'
+      ? `Shoreline © OpenStreetMap contributors (ODbL)${metadata.bathymetrySource === 'idnr-sonar' ? ' · Bathymetry: Indiana DNR Division of Fish & Wildlife' : ''} · ${demLabel}`
       : metadata.geometrySource === 'curated-sdf'
       ? 'Hand-built survey approximation (offline model)'
       : 'Procedural placeholder geometry — no survey data';
-  const depthLabel = metadata.depthIsEstimated ? 'Depths: estimated (distance-to-shore model)' : `Max depth ${metadata.maxDepthFt} ft from ${metadata.generationMethod === 'curated-survey' ? 'survey record' : 'AI recon'}; contour shape modelled`;
+  const depthLabel =
+    metadata.bathymetrySource === 'idnr-sonar'
+      ? `Depths: IDNR sonar survey${metadata.surveyDate ? ` ${metadata.surveyDate}` : ''}, ${metadata.contourIntervalFt || 5} ft contours, interpolated`
+      : metadata.depthIsEstimated
+      ? 'Depths: estimated (distance-to-shore model)'
+      : `Max depth ${metadata.maxDepthFt} ft on record (${metadata.generationMethod === 'wikipedia' ? 'Wikipedia' : metadata.generationMethod === 'curated-survey' ? 'survey record' : 'LLM recon'}); contour shape modelled`;
 
   const title = esc(metadata.name.toUpperCase());
   const subtitle = esc([metadata.county, metadata.state].filter(Boolean).join(', '));

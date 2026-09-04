@@ -7,6 +7,7 @@
  * network failure so the caller can fall back to curated / procedural geometry.
  */
 import { PNG } from 'pngjs';
+import { cacheGet, cacheSet } from './diskCache.js';
 
 export interface LonLat { lon: number; lat: number }
 export type Ring = LonLat[];
@@ -24,6 +25,12 @@ export interface OsmLake {
   areaKm2: number;
   perimeterKm: number;
   licence: string;
+  wikidataId?: string;
+  /** OSM `ele` tag (metres) when mapped */
+  elevationM?: number;
+  county?: string;
+  state?: string;
+  country?: string;
 }
 
 const NOMINATIM_BASE = process.env.NOMINATIM_BASE_URL || 'https://nominatim.openstreetmap.org';
@@ -83,6 +90,28 @@ function toRing(coords: number[][]): Ring {
 // ------------------------------------------------------------------ Nominatim
 
 const lakeCache = new Map<string, Promise<OsmLake | null>>();
+const OSM_DISK_TTL = 30 * 24 * 3600 * 1000;
+
+// Nominatim usage policy: at most one request per second. Serialize and space calls.
+let nominatimChain: Promise<void> = Promise.resolve();
+let lastNominatimAt = 0;
+async function nominatimFetch(url: string): Promise<Response> {
+  const run = async () => {
+    const wait = Math.max(0, lastNominatimAt + 1100 - Date.now());
+    if (wait) await new Promise((r) => setTimeout(r, wait));
+    lastNominatimAt = Date.now();
+    let res = await fetchWithTimeout(url, 20_000, { headers: { 'User-Agent': USER_AGENT, Accept: 'application/json' } });
+    if (res.status === 429 || res.status === 503) {
+      await new Promise((r) => setTimeout(r, 2500));
+      lastNominatimAt = Date.now();
+      res = await fetchWithTimeout(url, 20_000, { headers: { 'User-Agent': USER_AGENT, Accept: 'application/json' } });
+    }
+    return res;
+  };
+  const p = nominatimChain.then(run, run);
+  nominatimChain = p.then(() => undefined, () => undefined);
+  return p;
+}
 
 const WATER_TYPES = new Set(['lake', 'reservoir', 'water', 'pond', 'lagoon', 'basin', 'oxbow']);
 
@@ -96,6 +125,12 @@ export async function lookupLakeOSM(query: string): Promise<OsmLake | null> {
   if (!k) return null;
   const cached = lakeCache.get(k);
   if (cached) return cached;
+  const disk = cacheGet<OsmLake | null>('osm', k, OSM_DISK_TTL);
+  if (disk !== undefined) {
+    const p = Promise.resolve(disk);
+    lakeCache.set(k, p);
+    return p;
+  }
 
   const p = (async (): Promise<OsmLake | null> => {
     const url = `${NOMINATIM_BASE}/search?${new URLSearchParams({
@@ -103,12 +138,14 @@ export async function lookupLakeOSM(query: string): Promise<OsmLake | null> {
       format: 'jsonv2',
       polygon_geojson: '1',
       limit: '6',
-      addressdetails: '0',
+      addressdetails: '1',
+      extratags: '1',
+      namedetails: '1',
     }).toString()}`;
-    const res = await fetchWithTimeout(url, 20_000, { headers: { 'User-Agent': USER_AGENT, Accept: 'application/json' } });
+    const res = await nominatimFetch(url);
     if (!res.ok) throw new Error(`Nominatim ${res.status}`);
     const rows = (await res.json()) as any[];
-    if (!Array.isArray(rows) || rows.length === 0) return null;
+    if (!Array.isArray(rows) || rows.length === 0) { cacheSet('osm', k, null); return null; }
 
     // Prefer water features with polygon geometry; fall back to any polygon whose type looks watery.
     const isWater = (r: any) =>
@@ -116,7 +153,7 @@ export async function lookupLakeOSM(query: string): Promise<OsmLake | null> {
       WATER_TYPES.has(String(r.type || '').toLowerCase());
     const hasPoly = (r: any) => r.geojson && (r.geojson.type === 'Polygon' || r.geojson.type === 'MultiPolygon');
     const pick = rows.find((r) => isWater(r) && hasPoly(r)) ?? rows.find((r) => hasPoly(r) && WATER_TYPES.has(String(r.addresstype || '').toLowerCase()));
-    if (!pick) return null;
+    if (!pick) { cacheSet('osm', k, null); return null; }
 
     const polygons: Ring[][] =
       pick.geojson.type === 'Polygon'
@@ -136,10 +173,10 @@ export async function lookupLakeOSM(query: string): Promise<OsmLake | null> {
       }
     }
 
-    return {
+    const lake: OsmLake = {
       osmType: String(pick.osm_type),
       osmId: String(pick.osm_id),
-      name: String(pick.name || pick.display_name.split(',')[0]),
+      name: String(pick.namedetails?.['name:en'] || pick.name || pick.display_name.split(',')[0]),
       displayName: String(pick.display_name),
       lat,
       lon: Number(pick.lon),
@@ -148,7 +185,14 @@ export async function lookupLakeOSM(query: string): Promise<OsmLake | null> {
       areaKm2: areaM2 / 1e6,
       perimeterKm: perimM / 1000,
       licence: String(pick.licence || 'Data © OpenStreetMap contributors, ODbL 1.0'),
+      wikidataId: pick.extratags?.wikidata ? String(pick.extratags.wikidata) : undefined,
+      county: pick.address?.county ? String(pick.address.county) : undefined,
+      state: pick.address?.state ? String(pick.address.state) : pick.address?.region ? String(pick.address.region) : undefined,
+      country: pick.address?.country ? String(pick.address.country) : undefined,
+      elevationM: pick.extratags?.ele && Number.isFinite(Number(pick.extratags.ele)) ? Number(pick.extratags.ele) : undefined,
     };
+    cacheSet('osm', k, lake);
+    return lake;
   })().catch((err) => {
     console.warn('[geodata] OSM lookup failed for', JSON.stringify(query), '-', err?.message || err);
     lakeCache.delete(k); // allow retry later

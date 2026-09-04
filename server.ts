@@ -3,8 +3,7 @@ import express from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import { MIDWESTERN_LAKES } from './server/lakeData.js';
-import { clearTerrainCache, generateLakeTerrainGrid } from './server/lakeService.js';
-import { geminiAvailable } from './server/geminiTopoService.js';
+import { clearTerrainCache, generateLakeTerrainGrid, llmAvailable, llmDescription } from './server/lakeService.js';
 import { geodataEnabled, lookupLakeOSM } from './server/geoData.js';
 
 const DEFAULT_QUERY = 'Deam Lake, Indiana';
@@ -24,7 +23,7 @@ async function startServer() {
     res.json({
       status: 'ok',
       time: new Date().toISOString(),
-      gemini: geminiAvailable(),
+      llm: llmDescription(),
       geodata: geodataEnabled(),
     });
   });
@@ -101,7 +100,7 @@ async function startServer() {
     try {
       const { imageBase64, mimeType, query, gridSize } = req.body || {};
       if (!imageBase64) return res.status(400).json({ error: 'Missing imageBase64 in request' });
-      if (!geminiAvailable()) return res.status(503).json({ error: 'GEMINI_API_KEY is not configured on the server; chart analysis is unavailable.' });
+      if (!llmAvailable()) return res.status(503).json({ error: 'No LLM provider configured (set LLM_PROVIDER / an API key); chart analysis is unavailable.' });
       const data = await generateLakeTerrainGrid(query || 'Uploaded Topo Lake', parseGrid(gridSize), {
         uploadedImage: { base64: imageBase64, mimeType: mimeType || 'image/png' },
       });
@@ -116,7 +115,7 @@ async function startServer() {
   app.post('/api/ai-topo-recon', async (req, res) => {
     try {
       const { query, userNotes, gridSize } = req.body || {};
-      if (!geminiAvailable()) return res.status(503).json({ error: 'GEMINI_API_KEY is not configured on the server; AI recon is unavailable.' });
+      if (!llmAvailable()) return res.status(503).json({ error: 'No LLM provider configured (set LLM_PROVIDER / an API key); AI recon is unavailable.' });
       const data = await generateLakeTerrainGrid(query || DEFAULT_QUERY, parseGrid(gridSize), { forceAiRecon: true, userNotes });
       res.json(data);
     } catch (err: any) {
@@ -142,7 +141,7 @@ async function startServer() {
   // Probe upward if the port is busy (common when several local apps run at once)
   const listen = (port: number, attemptsLeft: number) => {
     const server = app.listen(port, '0.0.0.0', () => {
-      console.log(`lake-topo-3d listening on http://localhost:${port}  (gemini: ${geminiAvailable() ? 'on' : 'off'}, geodata: ${geodataEnabled() ? 'on' : 'off'})`);
+      console.log(`lake-topo-3d listening on http://localhost:${port}  (llm: ${llmDescription().provider}${llmAvailable() ? '/' + llmDescription().model : ''}, geodata: ${geodataEnabled() ? 'on' : 'off'})`);
     });
     server.on('error', (err: NodeJS.ErrnoException) => {
       if (err.code === 'EADDRINUSE' && attemptsLeft > 0) {

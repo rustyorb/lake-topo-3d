@@ -86,7 +86,7 @@ export const TopoMapViewer: React.FC<TopoMapViewerProps> = ({ gridData, onSelect
               </span>
             </div>
             <p className="text-xs text-slate-400">
-              Pool {metadata.surfaceElevationFt} ft MSL | Max depth {metadata.maxDepthFt} ft{metadata.depthIsEstimated ? ' (est.)' : ''} | {metadata.contourIntervalFt || 5}-ft depth contours
+              Pool {metadata.surfaceElevationFt} ft MSL | Max depth {metadata.maxDepthFt} ft{metadata.depthIsEstimated ? ' (est.)' : ''} | {metadata.contourIntervalFt || 5}-ft depth contours{metadata.bathymetrySource === 'idnr-sonar' ? ` | IDNR sonar survey${metadata.surveyDate ? ' ' + metadata.surveyDate : ''}` : ''}
             </p>
           </div>
         </div>
@@ -157,7 +157,7 @@ export const TopoMapViewer: React.FC<TopoMapViewerProps> = ({ gridData, onSelect
               <MapPin className="w-3 h-3 text-cyan-400" />
               <span>Landmarks</span>
             </span>
-            {features.map((f, i) => (
+            {features.filter((f) => Number.isFinite(f.normX)).map((f, i) => (
               <button
                 key={i}
                 onClick={(e) => {

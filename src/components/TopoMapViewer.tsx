@@ -1,19 +1,17 @@
 import React, { useState, useRef } from 'react';
-import { 
-  ZoomIn, 
-  ZoomOut, 
-  RotateCcw, 
-  Download, 
-  ExternalLink, 
-  Layers, 
-  MapPin, 
-  ShieldCheck, 
-  Compass, 
-  FileText, 
-  Info,
-  Maximize2
+import {
+  ZoomIn,
+  ZoomOut,
+  RotateCcw,
+  Download,
+  ExternalLink,
+  MapPin,
+  ShieldCheck,
+  Compass,
+  Info
 } from 'lucide-react';
-import { TerrainGridData, TopoFeature, GroundingSource } from '../types.js';
+import { TerrainGridData, TopoFeature } from '../types.js';
+import { describeGeometry } from '../lib/labels.js';
 
 interface TopoMapViewerProps {
   gridData: TerrainGridData;
@@ -81,14 +79,14 @@ export const TopoMapViewer: React.FC<TopoMapViewerProps> = ({ gridData, onSelect
           <div>
             <div className="flex items-center space-x-2">
               <span className="text-sm font-semibold text-slate-200">
-                {metadata.name} Topographic & Hydrographic Survey Map
+                {metadata.name} — topographic & bathymetric map
               </span>
-              <span className="text-[10px] px-2 py-0.5 rounded-full font-medium bg-cyan-950 text-cyan-300 border border-cyan-800">
-                USGS 7.5' & DNR Quad Standard
+              <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium border ${metadata.geometrySource === 'osm-dem' ? 'bg-emerald-950 text-emerald-300 border-emerald-800' : 'bg-amber-950 text-amber-300 border-amber-800'}`}>
+                {describeGeometry(metadata.geometrySource)}
               </span>
             </div>
             <p className="text-xs text-slate-400">
-              Elevation {metadata.surfaceElevationFt} ft MSL | Max Depth {metadata.maxDepthFt} ft | 5-ft Bathymetric Contours
+              Pool {metadata.surfaceElevationFt} ft MSL | Max depth {metadata.maxDepthFt} ft{metadata.depthIsEstimated ? ' (est.)' : ''} | {metadata.contourIntervalFt || 5}-ft depth contours{metadata.bathymetrySource === 'idnr-sonar' ? ` | IDNR sonar survey${metadata.surveyDate ? ' ' + metadata.surveyDate : ''}` : ''}
             </p>
           </div>
         </div>
@@ -144,7 +142,7 @@ export const TopoMapViewer: React.FC<TopoMapViewerProps> = ({ gridData, onSelect
         >
           {gridData.svgTopoMap ? (
             <div 
-              className="w-[680px] h-[680px] shadow-2xl rounded-lg overflow-hidden border border-slate-700/60"
+              className="w-[680px] h-[680px] shadow-2xl rounded-lg overflow-hidden border border-slate-700/60 bg-[#f7f3ea]"
               dangerouslySetInnerHTML={{ __html: gridData.svgTopoMap }}
             />
           ) : (
@@ -157,9 +155,9 @@ export const TopoMapViewer: React.FC<TopoMapViewerProps> = ({ gridData, onSelect
           <div className="absolute bottom-4 left-4 z-20 flex flex-wrap gap-1.5 max-w-md bg-slate-900/90 backdrop-blur p-2.5 rounded-xl border border-slate-800 shadow-xl">
             <span className="text-[10px] font-bold tracking-wide uppercase text-slate-400 w-full mb-1 flex items-center space-x-1">
               <MapPin className="w-3 h-3 text-cyan-400" />
-              <span>Surveyed Bathymetric & Topo Landmarks</span>
+              <span>Landmarks</span>
             </span>
-            {features.map((f, i) => (
+            {features.filter((f) => Number.isFinite(f.normX)).map((f, i) => (
               <button
                 key={i}
                 onClick={(e) => {
@@ -213,7 +211,7 @@ export const TopoMapViewer: React.FC<TopoMapViewerProps> = ({ gridData, onSelect
               <div className="flex items-center justify-between mb-2">
                 <div className="flex items-center space-x-1.5 text-emerald-400 font-semibold text-[11px]">
                   <ShieldCheck className="w-3.5 h-3.5" />
-                  <span>Grounding Sources & Hydrographic Data</span>
+                  <span>Data sources</span>
                 </div>
                 <button
                   onClick={() => setShowSourcesPanel(!showSourcesPanel)}
@@ -260,7 +258,7 @@ export const TopoMapViewer: React.FC<TopoMapViewerProps> = ({ gridData, onSelect
         <div className="px-4 py-2 bg-slate-900/90 border-t border-slate-800/80 text-[11px] text-slate-400 flex items-center space-x-2">
           <Info className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
           <span className="truncate">
-            <strong>Generative Limnological Synthesis:</strong> {metadata.topoAnalysisNotes}
+            <strong>Notes:</strong> {metadata.topoAnalysisNotes}
           </span>
         </div>
       )}

@@ -29,21 +29,25 @@ import { Lake3DViewer, WaterDisplayMode } from './components/Lake3DViewer.js';
 import { STLExportDialog } from './components/STLExportDialog.js';
 import { TopoMapViewer } from './components/TopoMapViewer.js';
 import { GenerativeTopoPanel } from './components/GenerativeTopoPanel.js';
-import { ColorSchemeMode, TerrainGridData, TopoFeature, TerrainShadingStyle } from './types.js';
+import { ColorSchemeMode, TerrainGridData, TerrainShadingStyle } from './types.js';
+import { suggestExaggeration } from './utils/stlExporter.js';
+import { describeBathymetry, describeDem, describeGeometry, describeMethod } from './lib/labels.js';
 
 const POPULAR_LAKES = [
   { label: 'Deam Lake, IN', query: 'Deam Lake, Indiana' },
-  { label: 'Beals Lake, IN', query: 'Beals Lake, Indiana' },
+  { label: 'Patoka Lake, IN', query: 'Patoka Lake, Indiana' },
   { label: 'Lake Wawasee, IN', query: 'Lake Wawasee, Indiana' },
   { label: 'Lake Monroe, IN', query: 'Lake Monroe, Indiana' },
+  { label: 'Beals Lake, IN', query: 'Beals Lake, Indiana' },
   { label: 'Devils Lake, WI', query: 'Devils Lake, Wisconsin' },
   { label: 'Torch Lake, MI', query: 'Torch Lake, Michigan' },
   { label: 'Lake Mendota, WI', query: 'Lake Mendota, Wisconsin' },
   { label: 'Lake Maxinkuckee, IN', query: 'Lake Maxinkuckee, Indiana' },
-  { label: 'Lake Minnetonka, MN', query: 'Lake Minnetonka, Minnesota' },
-  { label: 'Lake of the Ozarks, MO', query: 'Lake of the Ozarks, Missouri' },
   { label: 'Geneva Lake, WI', query: 'Geneva Lake, Wisconsin' },
+  { label: 'Lake of the Ozarks, MO', query: 'Lake of the Ozarks, Missouri' },
 ];
+
+const GRID_SIZE = 96;
 
 export type ViewDisplayMode = '3d' | 'topo' | 'split';
 
@@ -56,7 +60,7 @@ export default function App() {
   const [viewMode, setViewMode] = useState<ViewDisplayMode>('3d');
 
   // 3D Visual Controls
-  const [verticalExaggeration, setVerticalExaggeration] = useState<number>(2.2);
+  const [verticalExaggeration, setVerticalExaggeration] = useState<number>(3.0);
   const [baseThicknessRatio, setBaseThicknessRatio] = useState<number>(1.0);
   const [colorScheme, setColorScheme] = useState<ColorSchemeMode>('hypsometric');
   const [waterMode, setWaterMode] = useState<WaterDisplayMode>('carved-bed');
@@ -97,7 +101,7 @@ export default function App() {
     setIsLoading(true);
     setError(null);
     try {
-      let url = `/api/lake-terrain?q=${encodeURIComponent(query)}&gridSize=72`;
+      let url = `/api/lake-terrain?q=${encodeURIComponent(query)}&gridSize=${GRID_SIZE}`;
       if (options?.forceAiRecon) {
         url += `&forceAiRecon=true`;
       }
@@ -106,11 +110,13 @@ export default function App() {
       }
       const res = await fetch(url);
       if (!res.ok) {
-        throw new Error(`Failed to load lake terrain (${res.status})`);
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.error || `Failed to load lake terrain (${res.status})`);
       }
       const data: TerrainGridData = await res.json();
       setGridData(data);
       setCurrentQuery(query);
+      setVerticalExaggeration(suggestExaggeration(data, 120));
     } catch (err: any) {
       console.error('Error fetching lake:', err);
       setError(err.message || 'Could not fetch lake data. Please check connection.');
@@ -131,11 +137,12 @@ export default function App() {
           imageBase64,
           mimeType,
           query: lakeName || currentQuery,
-          gridSize: 72,
+          gridSize: GRID_SIZE,
         }),
       });
       if (!res.ok) {
-        throw new Error(`Failed to analyze topo image (${res.status})`);
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.error || `Failed to analyze topo image (${res.status})`);
       }
       const data: TerrainGridData = await res.json();
       setGridData(data);
@@ -181,13 +188,13 @@ export default function App() {
               </div>
               <div>
                 <h1 className="text-base font-bold tracking-tight text-white flex items-center gap-2">
-                  Midwestern Lake 3D
+                  Lake Topo 3D
                   <span className="text-[10px] uppercase font-semibold tracking-wider px-2 py-0.5 rounded-full bg-sky-500/10 text-sky-400 border border-sky-500/20">
                     Topo & STL
                   </span>
                 </h1>
                 <p className="text-[11px] text-slate-400">
-                  Topographical & Bathymetric Modeling for 3D Printing
+                  Real shorelines & elevation → printable 3D terrain
                 </p>
               </div>
             </div>
@@ -214,7 +221,7 @@ export default function App() {
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Enter any Midwestern lake (e.g. Deam Lake, Indiana)..."
+                placeholder="Any named lake — e.g. Patoka Lake, Indiana"
                 className="w-full bg-slate-950 border border-slate-700/80 hover:border-slate-600 focus:border-sky-500 pl-9 pr-20 py-2 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-sky-500 transition-all shadow-inner"
               />
               <button
@@ -325,10 +332,10 @@ export default function App() {
                 <div className="w-full h-full flex-1 flex flex-col items-center justify-center gap-3 text-slate-400 p-8">
                   <div className="w-10 h-10 border-3 border-sky-500 border-t-transparent rounded-full animate-spin" />
                   <p className="text-xs font-medium animate-pulse text-sky-300">
-                    Determining Topography & Depth Contours from Survey Records...
+                    Fetching shoreline & elevation tiles…
                   </p>
                   <p className="text-[11px] text-slate-500 text-center max-w-sm">
-                    Synthesizing USGS 7.5-minute quadrangles, DNR bathymetric charts, and surrounding glacial moraines
+                    OpenStreetMap polygon → Terrarium DEM → distance-to-shore bathymetry → contour map
                   </p>
                 </div>
               ) : error ? (
@@ -427,7 +434,9 @@ export default function App() {
                   <span className="text-base font-bold text-sky-400 font-mono">
                     {gridData.metadata.maxDepthFt} ft
                   </span>
-                  <span className="text-[10px] text-slate-500 block">({gridData.metadata.maxDepthM} m)</span>
+                  <span className="text-[10px] text-slate-500 block">
+                    ({gridData.metadata.maxDepthM} m){gridData.metadata.depthIsEstimated ? ' · estimated' : ''}
+                  </span>
                 </div>
 
                 <div className="bg-slate-900/90 border border-slate-800/80 p-3 rounded-xl">
@@ -449,12 +458,12 @@ export default function App() {
                 </div>
 
                 <div className="bg-slate-900/90 border border-slate-800/80 p-3 rounded-xl">
-                  <span className="text-[10px] text-slate-400 uppercase tracking-wider block font-mono">Topographic Relief</span>
+                  <span className="text-[10px] text-slate-400 uppercase tracking-wider block font-mono">Total Relief</span>
                   <span className="text-base font-bold text-purple-400 font-mono">
                     {Math.round((gridData.maxElevation - gridData.minElevation) * 3.28084)} ft
                   </span>
                   <span className="text-[10px] text-slate-500 block">
-                    Shoreline to deep basin
+                    Highest ridge to deepest point
                   </span>
                 </div>
               </div>
@@ -486,16 +495,25 @@ export default function App() {
                 <input
                   type="range"
                   min={1.0}
-                  max={4.0}
+                  max={25.0}
                   step={0.1}
                   value={verticalExaggeration}
                   onChange={(e) => setVerticalExaggeration(Number(e.target.value))}
                   className="w-full accent-sky-500 cursor-pointer"
                 />
-                <div className="flex justify-between text-[10px] text-slate-500 mt-0.5">
-                  <span>1.0x (True scale)</span>
-                  <span>2.2x (Optimal)</span>
-                  <span>4.0x (Dramatic)</span>
+                <div className="flex justify-between items-center text-[10px] text-slate-500 mt-0.5">
+                  <span>1.0x = true scale</span>
+                  {gridData && (
+                    <button
+                      type="button"
+                      onClick={() => setVerticalExaggeration(suggestExaggeration(gridData, 120))}
+                      className="text-sky-400 hover:text-sky-300 underline decoration-dotted cursor-pointer"
+                      title="Pick an exaggeration that gives this lake a printable amount of relief"
+                    >
+                      auto-fit ({suggestExaggeration(gridData, 120)}x)
+                    </button>
+                  )}
+                  <span>25x</span>
                 </div>
               </div>
 
@@ -840,20 +858,58 @@ export default function App() {
 
                   {isOverviewExpanded && (
                     <div className="mt-2.5 space-y-2.5">
-                      {gridData.metadata.id === 'deam-lake-in' && (
-                        <div className="p-2.5 rounded-xl bg-sky-950/40 border border-sky-500/30 text-[11px] text-sky-200/90 space-y-1">
-                          <div className="flex items-center gap-1.5 font-semibold text-sky-300">
-                            <span>DNR Hydrographic Survey Mapped:</span>
-                          </div>
-                          <ul className="list-disc list-inside space-y-0.5 text-slate-300 text-[10px]">
-                            <li><strong>30-ft Hole:</strong> Deepest depression in south basin (30.0 ft / 9.1 m)</li>
-                            <li><strong>Stone Branch North Arm:</strong> Long winding inlet channel from north hills</li>
-                            <li><strong>Northwest Arm & West Boat Ramp:</strong> Winding feeder cove & launch basin</li>
-                            <li><strong>East Antler Bays:</strong> Distinct dual-prong coves along east shore</li>
-                            <li><strong>South Dam:</strong> Earthen impoundment wall along Deam Lake Road</li>
-                          </ul>
+                      <div className="p-2.5 rounded-xl bg-slate-950/60 border border-slate-800 text-[11px] space-y-1">
+                        <div className="flex items-center justify-between">
+                          <span className="text-slate-400">Geometry</span>
+                          <span className={`font-medium ${gridData.metadata.geometrySource === 'osm-dem' ? 'text-emerald-300' : 'text-amber-300'}`}>
+                            {describeGeometry(gridData.metadata.geometrySource)}
+                          </span>
                         </div>
-                      )}
+                        <div className="flex items-center justify-between">
+                          <span className="text-slate-400">Metadata</span>
+                          <span className="font-medium text-slate-200">{describeMethod(gridData.metadata.generationMethod)}</span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-slate-400">Bathymetry</span>
+                          <span className={`font-medium ${gridData.metadata.bathymetrySource === 'idnr-sonar' ? 'text-emerald-300' : 'text-amber-300'}`}>
+                            {describeBathymetry(gridData.metadata.bathymetrySource)}{gridData.metadata.surveyDate ? ` (${gridData.metadata.surveyDate})` : ''}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-slate-400">Elevation</span>
+                          <span className={`font-medium ${gridData.metadata.demSource === '3dep' ? 'text-emerald-300' : 'text-slate-200'}`}>{describeDem(gridData.metadata.demSource)}</span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-slate-400">Max depth</span>
+                          <span className={`font-medium ${gridData.metadata.depthIsEstimated ? 'text-amber-300' : 'text-emerald-300'}`}>
+                            {gridData.metadata.depthIsEstimated ? 'Estimated from area' : 'On record'}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-slate-400">Frame</span>
+                          <span className="font-mono text-slate-300">{gridData.physicalWidthKm} × {gridData.physicalHeightKm} km · {gridData.gridSize}²</span>
+                        </div>
+                        {gridData.metadata.dnrPdfUrl && (
+                          <a href={gridData.metadata.dnrPdfUrl} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-emerald-400 hover:text-emerald-300">
+                            <ExternalLink className="w-3 h-3" /> Indiana DNR depth map (PDF)
+                          </a>
+                        )}
+                        {gridData.metadata.wikipediaUrl && (
+                          <a href={gridData.metadata.wikipediaUrl} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-sky-400 hover:text-sky-300">
+                            <ExternalLink className="w-3 h-3" /> Wikipedia article
+                          </a>
+                        )}
+                        {gridData.metadata.osmId && (
+                          <a
+                            href={`https://www.openstreetmap.org/${gridData.metadata.osmId}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center gap-1 text-sky-400 hover:text-sky-300"
+                          >
+                            <ExternalLink className="w-3 h-3" /> View shoreline on OpenStreetMap ({gridData.metadata.osmId})
+                          </a>
+                        )}
+                      </div>
 
                       <div className="text-[11px] text-slate-400 flex items-start gap-1.5 p-2 bg-slate-950/50 rounded-lg">
                         <Info className="w-3.5 h-3.5 text-slate-500 shrink-0 mt-0.5" />
@@ -880,8 +936,16 @@ export default function App() {
         </div>
       </main>
 
+      <footer className="max-w-7xl mx-auto w-full px-4 sm:px-6 pb-5 text-[10px] text-slate-500 flex flex-wrap gap-x-3 gap-y-1">
+        <span>Shorelines © <a className="underline decoration-dotted hover:text-slate-300" href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap contributors</a> (ODbL)</span>
+        <span>·</span>
+        <span>Bathymetry: <a className="underline decoration-dotted hover:text-slate-300" href="https://www.in.gov/dnr/fish-and-wildlife/fishing/lake-depth-maps/" target="_blank" rel="noopener noreferrer">Indiana DNR Fish &amp; Wildlife</a> sonar surveys where available, else modelled from distance to shore.</span>
+        <span>·</span>
+        <span>Elevation: USGS 3DEP (LiDAR) in the US, Terrarium tiles elsewhere.</span>
+      </footer>
+
       {/* STL Export Modal Dialog */}
-      {gridData && (
+      {gridData && isExportDialogOpen && (
         <STLExportDialog
           isOpen={isExportDialogOpen}
           onClose={() => setIsExportDialogOpen(false)}

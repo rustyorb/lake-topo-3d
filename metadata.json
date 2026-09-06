@@ -1,6 +1,8 @@
 {
-  "name": "Midwestern Lake 3D Topo Map & STL",
-  "description": "Generate interactive 3D topographic and bathymetric terrain maps for any Midwestern lake with 3D manipulation, custom vertical exaggeration, watertight solid mesh, and STL export for 3D printing.",
+  "name": "Lake Topo 3D",
+  "description": "Real OpenStreetMap shorelines and DEM elevation for any named lake: interactive 3D terrain with modelled bathymetry, vector topo/bathymetric map, and watertight STL export for 3D printing. Optional Gemini recon for surveyed depths.",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }

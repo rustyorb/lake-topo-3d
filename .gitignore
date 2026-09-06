@@ -6,3 +6,6 @@ coverage/
 *.log
 .env*
 !.env.example
+output.txt
+*.stl
+.cache/

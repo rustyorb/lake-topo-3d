@@ -1,22 +1,17 @@
-import React, { useState, useRef } from 'react';
-import { 
-  Sparkles, 
-  Search, 
-  Upload, 
-  Map, 
-  Layers, 
-  CheckCircle2, 
-  RefreshCw, 
-  FileText, 
+import React, { useState, useRef, useEffect } from 'react';
+import {
+  Sparkles,
+  Search,
+  Upload,
+  Layers,
+  RefreshCw,
   ExternalLink,
-  ShieldCheck,
-  HelpCircle,
   Image as ImageIcon,
-  Sliders,
   ChevronRight,
   Send
 } from 'lucide-react';
 import { TerrainGridData } from '../types.js';
+import { describeMethod } from '../lib/labels.js';
 
 interface GenerativeTopoPanelProps {
   gridData: TerrainGridData;
@@ -49,7 +44,12 @@ export const GenerativeTopoPanel: React.FC<GenerativeTopoPanelProps> = ({
   onTriggerAiRecon,
   onUploadTopoImage,
 }) => {
-  const [activeTab, setActiveTab] = useState<'recon' | 'upload' | 'features'>('recon');
+  const [activeTab, setActiveTab] = useState<'recon' | 'upload' | 'features'>('features');
+  const [llm, setLlm] = useState<{ provider: string; model: string } | null>(null);
+  useEffect(() => {
+    fetch('/api/health').then((r) => r.json()).then((h) => setLlm(h.llm || null)).catch(() => setLlm(null));
+  }, []);
+  const llmOn = !!llm && llm.provider !== 'none';
   const [userPrompt, setUserPrompt] = useState<string>('');
   const [isProcessingImage, setIsProcessingImage] = useState<boolean>(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -87,23 +87,17 @@ export const GenerativeTopoPanel: React.FC<GenerativeTopoPanelProps> = ({
             <Sparkles className="w-4 h-4" />
           </div>
           <div>
-            <h3 className="text-sm font-semibold text-white">Generative Topo Map Engine</h3>
+            <h3 className="text-sm font-semibold text-white">Sources & Enrichment</h3>
             <p className="text-[11px] text-slate-400">
-              Web search & hydrographic contour survey synthesis
+              {llmOn ? `LLM: ${llm!.provider} / ${llm!.model}` : 'No LLM configured — sourced data only'}
             </p>
           </div>
         </div>
 
         {/* Method Badge */}
         <div className="flex items-center space-x-1.5 px-2.5 py-1 rounded-full bg-slate-800 border border-slate-700 text-[11px]">
-          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-          <span className="font-medium text-slate-300 capitalize">
-            {metadata.generationMethod === 'ai-search-grounded'
-              ? 'Search Grounded'
-              : metadata.generationMethod === 'ai-topo-vision'
-              ? 'Optical Topo Vision'
-              : 'DNR / USGS Survey'}
-          </span>
+          <span className={`w-2 h-2 rounded-full ${metadata.generationMethod === 'heuristic' || metadata.generationMethod === 'ai-synthesis' ? 'bg-amber-400' : 'bg-emerald-400'}`}></span>
+          <span className="font-medium text-slate-300">{describeMethod(metadata.generationMethod)}</span>
         </div>
       </div>
 
@@ -148,7 +142,9 @@ export const GenerativeTopoPanel: React.FC<GenerativeTopoPanelProps> = ({
       {activeTab === 'recon' && (
         <div className="space-y-3">
           <p className="text-xs text-slate-300 leading-relaxed">
-            The AI queries official DNR hydrographic records, USGS 7.5-minute quadrangles, and limnological surveys to generatively reconstruct the lakebed contours, depth soundings, dams, and feeder creeks.
+            Shoreline, elevation, survey contours and Wikipedia facts are fetched first. AI recon only fills what's still missing
+            (geology, landmarks, a depth when no record exists) and is labelled unverified unless the provider cited web sources.
+            {!llmOn && ' Set LLM_PROVIDER in .env (ollama, lmstudio, openrouter, openai, anthropic, gemini) to enable it.'}
           </p>
 
           <form onSubmit={handleRunRecon} className="space-y-2">
@@ -172,18 +168,18 @@ export const GenerativeTopoPanel: React.FC<GenerativeTopoPanelProps> = ({
             <button
               type="button"
               onClick={() => handleRunRecon()}
-              disabled={isLoading}
+              disabled={isLoading || !llmOn}
               className="w-full flex items-center justify-center space-x-2 py-2 px-3 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 disabled:opacity-50 text-white font-medium text-xs rounded-lg shadow-md transition cursor-pointer"
             >
               {isLoading ? (
                 <>
                   <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                  <span>Searching USGS & DNR Topo Records...</span>
+                  <span>Running recon…</span>
                 </>
               ) : (
                 <>
                   <Sparkles className="w-3.5 h-3.5" />
-                  <span>Re-determine via AI Topo Map Recon</span>
+                  <span>{llmOn ? 'Run AI recon' : 'AI recon unavailable (no provider)'}</span>
                 </>
               )}
             </button>
@@ -193,7 +189,7 @@ export const GenerativeTopoPanel: React.FC<GenerativeTopoPanelProps> = ({
           {metadata.sources && metadata.sources.length > 0 && (
             <div className="pt-2 border-t border-slate-800/80">
               <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block mb-1.5">
-                Verified Hydrographic Citations ({metadata.sources.length})
+                Data sources ({metadata.sources.length})
               </span>
               <div className="space-y-1">
                 {metadata.sources.map((src, i) => (
@@ -222,7 +218,8 @@ export const GenerativeTopoPanel: React.FC<GenerativeTopoPanelProps> = ({
       {activeTab === 'upload' && (
         <div className="space-y-3">
           <p className="text-xs text-slate-300">
-            Upload any image of a Topographic Map (USGS 7.5' Quad) or DNR Bathymetric Chart. Gemini Vision will read the visual contour lines, depth markings, shoreline boundary, and dam coordinates to construct the 3D model.
+            Upload a depth chart or topo image. The configured vision model reads the printed depths and lake name; the shoreline and
+            terrain still come from map data when the name matches. {llmOn ? '' : 'Requires an LLM provider with vision.'}
           </p>
 
           <input
@@ -249,7 +246,7 @@ export const GenerativeTopoPanel: React.FC<GenerativeTopoPanelProps> = ({
           {/* Preset Sample Topo Charts */}
           <div>
             <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block mb-1.5">
-              Or load surveyed Midwestern topo charts:
+              Or run recon with survey notes for a curated lake:
             </span>
             <div className="space-y-1.5">
               {SAMPLE_TOPO_CHARTS.map((sample, idx) => (
@@ -300,7 +297,7 @@ export const GenerativeTopoPanel: React.FC<GenerativeTopoPanelProps> = ({
           {metadata.topoFeatures && metadata.topoFeatures.length > 0 && (
             <div className="space-y-1.5">
               <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">
-                Extracted Hydrographic Stations ({metadata.topoFeatures.length})
+                Landmarks ({metadata.topoFeatures.length})
               </span>
               <div className="max-h-48 overflow-y-auto space-y-1 pr-1">
                 {metadata.topoFeatures.map((feat, i) => (

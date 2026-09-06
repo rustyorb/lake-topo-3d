@@ -1,7 +1,7 @@
 {
-  "name": "react-example",
+  "name": "lake-topo-3d",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
@@ -9,9 +9,12 @@
     "start": "node dist/server.cjs",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "verify": "tsx scripts/verify-stl.ts",
+    "check": "npm run lint && npm run verify"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.123.0",
     "@google/genai": "^2.4.0",
     "@tailwindcss/vite": "^4.1.14",
     "@vitejs/plugin-react": "^5.0.4",
@@ -19,6 +22,7 @@
     "express": "^4.21.2",
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
+    "pngjs": "^7.0.0",
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
     "three": "^0.185.1",
@@ -27,6 +31,7 @@
   "devDependencies": {
     "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",
+    "@types/pngjs": "^6.0.5",
     "@types/three": "^0.185.4",
     "autoprefixer": "^10.4.21",
     "esbuild": "^0.25.0",
@@ -34,5 +39,9 @@
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",
     "vite": "^6.2.3"
+  },
+  "description": "Real shorelines, LiDAR terrain and surveyed bathymetry for any named lake, as an interactive 3D model, a topo map and a printable STL.",
+  "engines": {
+    "node": ">=20"
   }
 }

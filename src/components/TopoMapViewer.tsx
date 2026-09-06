@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useMemo } from 'react';
 import {
   ZoomIn,
   ZoomOut,
@@ -12,28 +12,76 @@ import {
 } from 'lucide-react';
 import { TerrainGridData, TopoFeature } from '../types.js';
 import { describeGeometry } from '../lib/labels.js';
+import { gridToLatLon } from '../lib/structure.js';
+import { svgMapFrame, gridToSvg, svgToGrid, SVG_MAP_SIZE } from '../lib/mapFrame.js';
+
+/** Marker overlaid on the 2D map (structure feature or waypoint). */
+export interface MapMarker {
+  id: string;
+  row: number;
+  col: number;
+  color: string;
+  label: string;
+  detail?: string;
+  shape: 'dot' | 'pin';
+}
 
 interface TopoMapViewerProps {
   gridData: TerrainGridData;
   onSelectFeature?: (feature: TopoFeature) => void;
+  markers?: MapMarker[];
+  selectedMarkerId?: string | null;
+  pinMode?: boolean;
+  onDropPin?: (cell: { row: number; col: number }) => void;
+  onSelectMarker?: (id: string) => void;
 }
 
-export const TopoMapViewer: React.FC<TopoMapViewerProps> = ({ gridData, onSelectFeature }) => {
+const FT_PER_M = 3.28084;
+
+export const TopoMapViewer: React.FC<TopoMapViewerProps> = ({ gridData, onSelectFeature, markers = [], selectedMarkerId = null, pinMode = false, onDropPin, onSelectMarker }) => {
   const [zoom, setZoom] = useState<number>(1);
   const [pan, setPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState<boolean>(false);
   const [dragStart, setDragStart] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [selectedFeature, setSelectedFeature] = useState<TopoFeature | null>(null);
-  const [showSourcesPanel, setShowSourcesPanel] = useState<boolean>(true);
+  const [showSourcesPanel, setShowSourcesPanel] = useState<boolean>(false);
+  const [cursor, setCursor] = useState<{ depthFt: number; elevFt: number; isWater: boolean; lat: number; lon: number } | null>(null);
 
   const containerRef = useRef<HTMLDivElement>(null);
+  const sheetRef = useRef<HTMLDivElement>(null);
+  const downRef = useRef<{ x: number; y: number } | null>(null);
+
+  const frame = useMemo(() => svgMapFrame(gridData.physicalWidthKm, gridData.physicalHeightKm), [gridData.physicalWidthKm, gridData.physicalHeightKm]);
+
+  /** Mouse event → fractional grid cell, using the rendered sheet's rect (which includes zoom/pan). */
+  const cellUnderMouse = (e: React.MouseEvent): { row: number; col: number } | null => {
+    const sheet = sheetRef.current;
+    if (!sheet) return null;
+    const rect = sheet.getBoundingClientRect();
+    if (!rect.width || !rect.height) return null;
+    const sx = ((e.clientX - rect.left) / rect.width) * SVG_MAP_SIZE;
+    const sy = ((e.clientY - rect.top) / rect.height) * SVG_MAP_SIZE;
+    return svgToGrid(frame, gridData.gridSize, sx, sy);
+  };
 
   const handleMouseDown = (e: React.MouseEvent) => {
     setIsDragging(true);
     setDragStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
+    downRef.current = { x: e.clientX, y: e.clientY };
   };
 
   const handleMouseMove = (e: React.MouseEvent) => {
+    const cell = cellUnderMouse(e);
+    if (cell) {
+      const r = Math.round(cell.row), c = Math.round(cell.col);
+      const { lat, lon } = gridToLatLon(gridData, cell.row, cell.col);
+      setCursor({
+        depthFt: Math.round(gridData.depths[r][c] * FT_PER_M * 10) / 10,
+        elevFt: Math.round(gridData.elevations[r][c] * FT_PER_M),
+        isWater: gridData.waterMask[r][c],
+        lat, lon,
+      });
+    } else setCursor(null);
     if (!isDragging) return;
     setPan({
       x: e.clientX - dragStart.x,
@@ -41,8 +89,19 @@ export const TopoMapViewer: React.FC<TopoMapViewerProps> = ({ gridData, onSelect
     });
   };
 
-  const handleMouseUp = () => {
+  const handleMouseUp = (e: React.MouseEvent) => {
     setIsDragging(false);
+    const down = downRef.current;
+    downRef.current = null;
+    if (!down || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 5) return; // a drag, not a click
+    if (!(pinMode || e.shiftKey)) return;
+    const cell = cellUnderMouse(e);
+    if (cell) onDropPin?.(cell);
+  };
+
+  const handleMouseLeave = () => {
+    setIsDragging(false);
+    setCursor(null);
   };
 
   const handleReset = () => {
@@ -132,7 +191,8 @@ export const TopoMapViewer: React.FC<TopoMapViewerProps> = ({ gridData, onSelect
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
-        onMouseLeave={handleMouseUp}
+        onMouseLeave={handleMouseLeave}
+        style={pinMode ? { cursor: 'crosshair' } : undefined}
       >
         <div 
           className="transition-transform duration-75 ease-out max-w-full max-h-full flex items-center justify-center p-4"
@@ -141,14 +201,48 @@ export const TopoMapViewer: React.FC<TopoMapViewerProps> = ({ gridData, onSelect
           }}
         >
           {gridData.svgTopoMap ? (
-            <div 
-              className="w-[680px] h-[680px] shadow-2xl rounded-lg overflow-hidden border border-slate-700/60 bg-[#f7f3ea]"
-              dangerouslySetInnerHTML={{ __html: gridData.svgTopoMap }}
-            />
+            <div ref={sheetRef} className="relative w-[680px] h-[680px] shadow-2xl rounded-lg overflow-hidden border border-slate-700/60 bg-[#f7f3ea]">
+              <div className="w-full h-full" dangerouslySetInnerHTML={{ __html: gridData.svgTopoMap }} />
+              {/* Overlay markers positioned in SVG page space; counter-scaled so they stay the same size at any zoom */}
+              {markers.map((m) => {
+                const p = gridToSvg(frame, gridData.gridSize, m.col, m.row);
+                const selected = m.id === selectedMarkerId;
+                return (
+                  <button
+                    key={m.id}
+                    type="button"
+                    title={m.detail ? `${m.label} — ${m.detail}` : m.label}
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onMouseUp={(e) => e.stopPropagation()}
+                    onClick={(e) => { e.stopPropagation(); onSelectMarker?.(m.id); }}
+                    className="absolute -translate-x-1/2 -translate-y-1/2 cursor-pointer"
+                    style={{ left: `${(p.x / SVG_MAP_SIZE) * 100}%`, top: `${(p.y / SVG_MAP_SIZE) * 100}%`, transform: `translate(-50%, ${m.shape === 'pin' ? '-100%' : '-50%'}) scale(${1 / zoom})`, transformOrigin: m.shape === 'pin' ? '50% 100%' : '50% 50%' }}
+                  >
+                    {m.shape === 'pin' ? (
+                      <span className="block" style={{ width: 14, height: 20 }}>
+                        <svg viewBox="0 0 14 20" width="14" height="20"><path d="M7 0C3.1 0 0 3.1 0 7c0 5 7 13 7 13s7-8 7-13c0-3.9-3.1-7-7-7z" fill={m.color} stroke="#1e293b" strokeWidth="1.2"/><circle cx="7" cy="7" r="2.6" fill="#fff"/></svg>
+                      </span>
+                    ) : (
+                      <span className="block rounded-full border-2 border-slate-900 shadow" style={{ width: selected ? 14 : 10, height: selected ? 14 : 10, background: m.color, boxShadow: selected ? `0 0 0 3px ${m.color}66` : undefined }} />
+                    )}
+                  </button>
+                );
+              })}
+            </div>
           ) : (
             <div className="text-slate-400 text-sm">Generating vector topographic survey map...</div>
           )}
         </div>
+
+        {/* Cursor readout */}
+        {cursor && (
+          <div className="absolute top-3 right-3 z-20 bg-slate-900/95 backdrop-blur border border-slate-700 rounded-lg px-3 py-1.5 text-xs font-mono shadow-xl pointer-events-none">
+            <span className={cursor.isWater ? 'text-cyan-300' : 'text-emerald-300'}>{cursor.isWater ? `${cursor.depthFt} ft deep` : `${cursor.elevFt} ft elev`}</span>
+            <span className="text-slate-500"> · </span>
+            <span className="text-slate-300">{cursor.lat.toFixed(5)}, {cursor.lon.toFixed(5)}</span>
+            {(pinMode) && <span className="text-yellow-300"> · click to pin</span>}
+          </div>
+        )}
 
         {/* Floating Topo Features Quick-Select Pills (Bottom Left) */}
         {features.length > 0 && (

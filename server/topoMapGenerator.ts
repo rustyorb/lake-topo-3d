@@ -1,5 +1,6 @@
 import { TerrainGridData, TopoFeature } from '../src/types.js';
 import { fieldFrom2D, isolines, levelRange, Polyline } from '../src/lib/contours.js';
+import { svgMapFrame } from '../src/lib/mapFrame.js';
 import { formatDms } from './geoData.js';
 import { pngDataUri } from './png.js';
 
@@ -67,17 +68,8 @@ function pickScaleBar(pxPerMetre: number): { label: string; px: number } {
  */
 export function generateSvgTopoMap(data: TerrainGridData): string {
   const { metadata, gridSize: n, elevations, waterMask, depths, waterElevation } = data;
-  const W = 800;
-  const H = 800;
-  const pad = 52;
-  const inner = W - pad * 2;
-
-  // Map box with true physical aspect
-  const aspect = (data.physicalHeightKm || 1) / (data.physicalWidthKm || 1);
-  const mapW = aspect <= 1 ? inner : inner / aspect;
-  const mapH = aspect <= 1 ? inner * aspect : inner;
-  const mapX = pad + (inner - mapW) / 2;
-  const mapY = pad + (inner - mapH) / 2;
+  // Shared with the browser overlay code so markers land on the same pixels.
+  const { W, H, pad, inner, mapX, mapY, mapW, mapH } = svgMapFrame(data.physicalWidthKm, data.physicalHeightKm);
   const gx = (col: number) => mapX + (col / (n - 1)) * mapW;
   const gy = (row: number) => mapY + (row / (n - 1)) * mapH;
   const toPixel = (normX: number, normY: number) => ({ x: mapX + ((normX + 1) / 2) * mapW, y: mapY + ((normY + 1) / 2) * mapH });
@@ -135,6 +127,38 @@ export function generateSvgTopoMap(data: TerrainGridData): string {
     return `<text x="${gx(mid[0]).toFixed(1)}" y="${gy(mid[1]).toFixed(1)}" transform="rotate(${angle.toFixed(0)} ${gx(mid[0]).toFixed(1)} ${gy(mid[1]).toFixed(1)})" font-family="ui-monospace, monospace" font-size="8.5" font-weight="600" fill="${fill}" text-anchor="middle" dominant-baseline="middle" paint-order="stroke" stroke="#f7f3ea" stroke-width="3" stroke-linejoin="round">${text}</text>`;
   };
 
+  /** Repeats a label along every line at roughly `everyPx` spacing, rotated to the line. */
+  const labelsAlong = (lines: Polyline[], text: string, fill: string, everyPx: number, size: number): string => {
+    const out: string[] = [];
+    for (const l of lines) {
+      const len = lineLengthPx(l);
+      if (len < everyPx * 0.6) continue;
+      const count = Math.max(1, Math.floor(len / everyPx));
+      let acc = 0;
+      let next = (len - (count - 1) * everyPx) / 2;
+      let placed = 0;
+      for (let i = 1; i < l.length && placed < count; i++) {
+        const x0 = gx(l[i - 1][0]), y0 = gy(l[i - 1][1]);
+        const x1 = gx(l[i][0]), y1 = gy(l[i][1]);
+        const seg = Math.hypot(x1 - x0, y1 - y0);
+        while (acc + seg >= next && placed < count) {
+          const t = seg > 0 ? (next - acc) / seg : 0;
+          const x = x0 + (x1 - x0) * t, y = y0 + (y1 - y0) * t;
+          let angle = (Math.atan2(y1 - y0, x1 - x0) * 180) / Math.PI;
+          if (angle > 90) angle -= 180;
+          if (angle < -90) angle += 180;
+          if (x > mapX + 4 && x < mapX + mapW - 4 && y > mapY + 4 && y < mapY + mapH - 4) {
+            out.push(`<text x="${x.toFixed(1)}" y="${y.toFixed(1)}" transform="rotate(${angle.toFixed(0)} ${x.toFixed(1)} ${y.toFixed(1)})" font-family="ui-monospace, monospace" font-size="${size}" font-weight="600" fill="${fill}" text-anchor="middle" dominant-baseline="middle" paint-order="stroke" stroke="#f7f3ea" stroke-width="2.6" stroke-linejoin="round">${text}</text>`);
+          }
+          placed++;
+          next += everyPx;
+        }
+        acc += seg;
+      }
+    }
+    return out.join('');
+  };
+
   const landPaths: string[] = [];
   const landLabels: string[] = [];
   for (const lvl of levelRange(landInt, maxLandFt, landInt)) {
@@ -147,13 +171,47 @@ export function generateSvgTopoMap(data: TerrainGridData): string {
 
   const bathyPaths: string[] = [];
   const bathyLabels: string[] = [];
-  for (const d of levelRange(bathyInt, maxDepthFt, bathyInt)) {
-    const lines = isolines(field, n, n, -d);
-    if (!lines.length) continue;
-    const isIndex = Math.round(d / bathyInt) % 2 === 0;
-    bathyPaths.push(`<path d="${pathFor(lines)}" stroke="#1d4ed8" stroke-width="${isIndex ? 1.2 : 0.7}" stroke-opacity="${isIndex ? 0.9 : 0.7}" fill="none"/>`);
-    bathyLabels.push(labelFor(lines, `${d}'`, '#1e3a8a', isIndex ? 50 : 90));
+  const nativeLines = data.surveyContours && data.surveyContours.length ? data.surveyContours : null;
+  if (nativeLines) {
+    // Draw the surveyed lines themselves, labelled the way the DNR sheets are ("24-foot"),
+    // repeated along long lines so every stretch of the lake reads without hunting.
+    const byDepth = new Map<number, Polyline[]>();
+    for (const line of nativeLines) {
+      const arr = byDepth.get(line.depthFt) || [];
+      arr.push(line.points);
+      byDepth.set(line.depthFt, arr);
+    }
+    const levels = Array.from(byDepth.keys()).sort((a, b) => a - b);
+    const indexEvery = bathyInt <= 2 ? 5 : 2;
+    // Label density follows how much line there is: a small lake in a big frame gets sparser labels.
+    let totalPx = 0;
+    for (const lines of byDepth.values()) for (const l of lines) totalPx += lineLengthPx(l);
+    const dense = totalPx > 6000;
+    const crowded = totalPx > 14000;
+    for (const d of levels) {
+      const lines = byDepth.get(d)!;
+      const isIndex = Math.round(d / bathyInt) % indexEvery === 0;
+      bathyPaths.push(`<path d="${pathFor(lines)}" stroke="#1d4ed8" stroke-width="${isIndex ? 1.25 : 0.65}" stroke-opacity="${isIndex ? 0.95 : 0.75}" fill="none" stroke-linejoin="round"/>`);
+      if (!isIndex && crowded) continue;
+      bathyLabels.push(labelsAlong(lines, `${d}-foot`, '#1e3a8a', (isIndex ? 130 : 220) * (dense ? 1.5 : 1), isIndex ? 7.5 : 6.5));
+    }
+  } else {
+    for (const d of levelRange(bathyInt, maxDepthFt, bathyInt)) {
+      const lines = isolines(field, n, n, -d);
+      if (!lines.length) continue;
+      const isIndex = Math.round(d / bathyInt) % 2 === 0;
+      bathyPaths.push(`<path d="${pathFor(lines)}" stroke="#1d4ed8" stroke-width="${isIndex ? 1.2 : 0.7}" stroke-opacity="${isIndex ? 0.9 : 0.7}" fill="none"/>`);
+      bathyLabels.push(labelFor(lines, `${d}'`, '#1e3a8a', isIndex ? 50 : 90));
+    }
   }
+
+  // ---- spot elevations on land ("564 ft" with a triangle)
+  const spotElements = (data.spotElevations || [])
+    .map((sp) => {
+      const x = gx(sp.col), y = gy(sp.row);
+      return `<g><polygon points="${x},${(y - 4).toFixed(1)} ${(x + 3.5).toFixed(1)},${(y + 2.5).toFixed(1)} ${(x - 3.5).toFixed(1)},${(y + 2.5).toFixed(1)}" fill="#3f3a32"/><text x="${(x + 6).toFixed(1)}" y="${(y + 3).toFixed(1)}" font-family="system-ui, sans-serif" font-size="7" font-style="italic" fill="#3f3a32" paint-order="stroke" stroke="#f7f3ea" stroke-width="2.5">${sp.elevFt} ft</text></g>`;
+    })
+    .join('');
 
   const shoreline = isolines(field, n, n, 0.01);
   const shorePath = `<path d="${pathFor(shoreline)}" stroke="#0c4a6e" stroke-width="1.8" fill="none" stroke-linejoin="round"/>`;
@@ -232,6 +290,7 @@ export function generateSvgTopoMap(data: TerrainGridData): string {
     <g id="bathy-contours">${bathyPaths.join('')}</g>
     ${shorePath}
     <g id="contour-labels">${landLabels.join('')}${bathyLabels.join('')}</g>
+    <g id="spot-elevations">${spotElements}</g>
     <g id="features">${featureElements}</g>
   </g>
   <rect x="${mapX}" y="${mapY}" width="${mapW}" height="${mapH}" fill="none" stroke="#3f3a32" stroke-width="1"/>
@@ -249,7 +308,7 @@ export function generateSvgTopoMap(data: TerrainGridData): string {
     <line x1="${pad + 16}" y1="${H - pad - 66}" x2="${pad + 40}" y2="${H - pad - 66}" stroke="#0c4a6e" stroke-width="1.8"/>
     <text x="${pad + 46}" y="${H - pad - 63}" font-family="system-ui, sans-serif" font-size="8" fill="#3f3a32">Shoreline (normal pool)</text>
     <line x1="${pad + 16}" y1="${H - pad - 52}" x2="${pad + 40}" y2="${H - pad - 52}" stroke="#1d4ed8" stroke-width="1"/>
-    <text x="${pad + 46}" y="${H - pad - 49}" font-family="system-ui, sans-serif" font-size="8" fill="#3f3a32">Depth contours, ${bathyInt} ft (index every ${bathyInt * 2} ft)</text>
+    <text x="${pad + 46}" y="${H - pad - 49}" font-family="system-ui, sans-serif" font-size="8" fill="#3f3a32">${nativeLines ? `IDNR survey contours, ${bathyInt} ft (index every ${bathyInt * (bathyInt <= 2 ? 5 : 2)} ft)` : `Depth contours, ${bathyInt} ft (index every ${bathyInt * 2} ft)`}</text>
     <line x1="${pad + 16}" y1="${H - pad - 38}" x2="${pad + 40}" y2="${H - pad - 38}" stroke="#9a6b3c" stroke-width="1"/>
     <text x="${pad + 46}" y="${H - pad - 35}" font-family="system-ui, sans-serif" font-size="8" fill="#3f3a32">Land contours, ${landInt} ft (index every ${landInt * 5} ft)</text>
     <text x="${pad + 16}" y="${H - pad - 20}" font-family="system-ui, sans-serif" font-size="7.5" fill="#6b4423">${esc(depthLabel)}</text>

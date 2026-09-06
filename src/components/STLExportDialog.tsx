@@ -2,8 +2,10 @@ import React, { useState, useMemo } from 'react';
 import { TerrainGridData, STLOptions } from '../types.js';
 import {
   generateWatertightSTLMesh,
+  generateSplitMeshes,
   exportToBinarySTL,
   exportToAsciiSTL,
+  exportTo3MF,
   downloadBlob,
   suggestExaggeration,
 } from '../utils/stlExporter.js';
@@ -16,7 +18,13 @@ import {
   Layers,
   Box,
   FileCode2,
+  Palette,
 } from 'lucide-react';
+
+export type MaterialMode = 'single' | 'split-stl' | '3mf';
+
+const LAND_COLOR = '#D6C7A1';
+const WATER_COLOR = '#3B82F6';
 
 interface STLExportDialogProps {
   isOpen: boolean;
@@ -38,6 +46,7 @@ export const STLExportDialog: React.FC<STLExportDialogProps> = ({
   const [terraceContours, setTerraceContours] = useState<boolean>(false);
   const [terraceStepFt, setTerraceStepFt] = useState<number>(5);
   const [format, setFormat] = useState<'binary' | 'ascii'>('binary');
+  const [materialMode, setMaterialMode] = useState<MaterialMode>('single');
   const [isExporting, setIsExporting] = useState<boolean>(false);
   const [downloadSuccess, setDownloadSuccess] = useState<boolean>(false);
 
@@ -55,6 +64,13 @@ export const STLExportDialog: React.FC<STLExportDialogProps> = ({
     return generateWatertightSTLMesh(gridData, opts);
   }, [gridData, targetWidthMm, baseThicknessMm, verticalExaggeration, includeWaterCap, terraceContours, terraceStepFt]);
 
+  // Two mating solids (land, lake bed) for multi-material printers; only built when asked for.
+  const splitPreview = useMemo(() => {
+    if (materialMode === 'single') return null;
+    const opts: STLOptions = { baseThicknessMm, targetWidthMm, verticalExaggeration, includeWaterCap, format, terraceContours, terraceStepFt };
+    return generateSplitMeshes(gridData, opts);
+  }, [gridData, targetWidthMm, baseThicknessMm, verticalExaggeration, includeWaterCap, terraceContours, terraceStepFt, materialMode]);
+
   const trueScale = Math.round(1000 / meshPreview.stats.mmPerMetreHorizontal);
 
   if (!isOpen) return null;
@@ -67,16 +83,28 @@ export const STLExportDialog: React.FC<STLExportDialogProps> = ({
       try {
         const lakeSlug = gridData.metadata.name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
         const stateSlug = gridData.metadata.state.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-        const filename = `${lakeSlug}-${stateSlug}-${targetWidthMm}mm-${verticalExaggeration.toFixed(1)}x.stl`;
+        const stem = `${lakeSlug}-${stateSlug}-${targetWidthMm}mm-${verticalExaggeration.toFixed(1)}x`;
+        const encode = (tris: typeof meshPreview.triangles, name: string) =>
+          format === 'binary' ? exportToBinarySTL(tris, name) : exportToAsciiSTL(tris, name);
 
-        let blob: Blob;
-        if (format === 'binary') {
-          blob = exportToBinarySTL(meshPreview.triangles, gridData.metadata.name);
+        if (materialMode === 'single' || !splitPreview) {
+          downloadBlob(encode(meshPreview.triangles, gridData.metadata.name), `${stem}.stl`);
+        } else if (materialMode === 'split-stl') {
+          downloadBlob(encode(splitPreview.land.triangles, `${gridData.metadata.name} land`), `${stem}-land.stl`);
+          // A second download a beat later so the browser does not swallow it
+          setTimeout(() => downloadBlob(encode(splitPreview.water.triangles, `${gridData.metadata.name} lake`), `${stem}-lake.stl`), 400);
         } else {
-          blob = exportToAsciiSTL(meshPreview.triangles, gridData.metadata.name);
+          downloadBlob(
+            exportTo3MF(
+              [
+                { name: 'Land', triangles: splitPreview.land.triangles, colorHex: LAND_COLOR },
+                { name: 'Lake bed', triangles: splitPreview.water.triangles, colorHex: WATER_COLOR },
+              ],
+              gridData.metadata.name
+            ),
+            `${stem}.3mf`
+          );
         }
-
-        downloadBlob(blob, filename);
         setDownloadSuccess(true);
       } catch (err) {
         console.error('Failed to generate STL:', err);
@@ -278,6 +306,46 @@ export const STLExportDialog: React.FC<STLExportDialogProps> = ({
             )}
           </div>
 
+          {/* Multi-material split */}
+          <div className="p-3 bg-slate-950/50 rounded-xl border border-slate-800 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
+                <Palette className="w-3.5 h-3.5 text-sky-400" /> Materials / colours
+              </span>
+              <span className="text-[10px] text-slate-500">AMS · MMU · multi-part import</span>
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              {([
+                { id: 'single', label: 'One solid', desc: 'Single STL, one filament.' },
+                { id: 'split-stl', label: 'Land + lake STLs', desc: 'Two mating STLs. Import together as one object, give the lake part blue.' },
+                { id: '3mf', label: '3MF, 2 parts', desc: 'One object with a land part and a lake part, colours pre-set.' },
+              ] as Array<{ id: MaterialMode; label: string; desc: string }>).map((m) => (
+                <button
+                  key={m.id}
+                  type="button"
+                  onClick={() => setMaterialMode(m.id)}
+                  className={`p-2.5 rounded-lg border text-left cursor-pointer transition-all ${
+                    materialMode === m.id ? 'bg-sky-950/40 border-sky-500/80 text-white' : 'bg-slate-950/40 border-slate-800 text-slate-400 hover:border-slate-700'
+                  }`}
+                >
+                  <div className="text-xs font-semibold flex items-center gap-1.5">
+                    {m.id !== 'single' && <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: WATER_COLOR }} />}
+                    {m.id !== 'single' && <span className="inline-block w-2.5 h-2.5 rounded-sm -ml-1" style={{ background: LAND_COLOR }} />}
+                    {m.label}
+                  </div>
+                  <p className="text-[10px] text-slate-400 mt-1 leading-relaxed">{m.desc}</p>
+                </button>
+              ))}
+            </div>
+            {materialMode !== 'single' && (
+              <p className="text-[10px] text-slate-400 leading-relaxed">
+                The lake part is every grid cell inside the shoreline, cut vertically from the bed down to the base, so its top face is the bathymetry.
+                In Bambu Studio: drag both STLs in together and answer <em>Yes</em> to "load as a single object with multiple parts", then set the lake part's filament.
+                The 3MF loads as one object with two parts already; the colours are hints and some slicers ignore them.
+              </p>
+            )}
+          </div>
+
           {/* STL Format Selector */}
           <div className="flex items-center justify-between p-3 bg-slate-950/40 rounded-xl border border-slate-800 text-xs">
             <span className="text-slate-300 font-medium flex items-center gap-1.5">
@@ -322,7 +390,9 @@ export const STLExportDialog: React.FC<STLExportDialogProps> = ({
             <div className="flex items-center justify-between text-slate-300">
               <span className="text-slate-400">Watertight Triangles:</span>
               <span className="font-mono font-semibold text-white">
-                {meshPreview.stats.triangleCount.toLocaleString()} facets
+                {splitPreview
+                  ? `${splitPreview.land.stats.triangleCount.toLocaleString()} land + ${splitPreview.water.stats.triangleCount.toLocaleString()} lake`
+                  : `${meshPreview.stats.triangleCount.toLocaleString()} facets`}
               </span>
             </div>
             <div className="flex items-center justify-between text-slate-300">
@@ -340,7 +410,7 @@ export const STLExportDialog: React.FC<STLExportDialogProps> = ({
           {downloadSuccess && (
             <div className="p-3 bg-emerald-950/40 border border-emerald-500/40 rounded-xl text-xs text-emerald-300 flex items-center gap-2">
               <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-              <span>STL file generated and downloaded! Check your downloads folder.</span>
+              <span>{materialMode === 'split-stl' ? 'Two STL files downloaded (land and lake). Import them together.' : 'File generated and downloaded. Check your downloads folder.'}</span>
             </div>
           )}
         </div>
@@ -368,7 +438,7 @@ export const STLExportDialog: React.FC<STLExportDialogProps> = ({
             ) : (
               <>
                 <Download className="w-4 h-4" />
-                <span>Download .STL File</span>
+                <span>{materialMode === '3mf' ? 'Download .3MF' : materialMode === 'split-stl' ? 'Download 2 STL files' : 'Download .STL File'}</span>
               </>
             )}
           </button>

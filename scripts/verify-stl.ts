@@ -5,7 +5,7 @@
  *
  *   npx tsx scripts/verify-stl.ts
  */
-import { generateWatertightSTLMesh, computeNormal, encodeBinarySTL, type Triangle } from '../src/utils/stlExporter.js';
+import { generateWatertightSTLMesh, generateSplitMeshes, computeNormal, encodeBinarySTL, encode3MF, type Triangle } from '../src/utils/stlExporter.js';
 import type { TerrainGridData } from '../src/types.js';
 
 function fakeGrid(size: number): TerrainGridData {
@@ -78,6 +78,23 @@ for (const terrace of [false, true]) {
     if (!(bestY > stats.lengthMm * 0.8)) { console.log('  FAIL: north edge is not at +Y (mirrored)'); failures++; }
   }
 }
+// Material split: both parts closed, and together they hold exactly the single solid's volume.
+{
+  const opts = { baseThicknessMm: 4, targetWidthMm: 120, verticalExaggeration: 3, includeWaterCap: false, format: 'binary' as const };
+  const whole = check(generateWatertightSTLMesh(grid, opts).triangles);
+  const split = generateSplitMeshes(grid, opts);
+  const land = check(split.land.triangles);
+  const water = check(split.water.triangles);
+  const sum = land.volume + water.volume;
+  const ok = land.badEdges === 0 && water.badEdges === 0 && land.volume > 0 && water.volume > 0 && Math.abs(sum - whole.volume) < 1e-3 * whole.volume;
+  console.log(`split: land tris=${split.land.triangles.length} bad=${land.badEdges} vol=${land.volume.toFixed(1)} · water tris=${split.water.triangles.length} bad=${water.badEdges} vol=${water.volume.toFixed(1)} · sum=${sum.toFixed(1)} whole=${whole.volume.toFixed(1)} ${ok ? 'OK' : 'FAIL'}`);
+  if (!ok) failures++;
+  const mf = encode3MF([{ name: 'Land', triangles: split.land.triangles, colorHex: '#D6C7A1' }, { name: 'Lake bed', triangles: split.water.triangles, colorHex: '#3B82F6' }], 'Test');
+  const sig = new DataView(mf).getUint32(0, true);
+  console.log('3MF bytes', mf.byteLength, sig === 0x04034b50 ? '(zip signature OK)' : 'FAIL: bad zip signature');
+  if (sig !== 0x04034b50) failures++;
+}
+
 const bin = encodeBinarySTL(generateWatertightSTLMesh(grid, { baseThicknessMm: 4, targetWidthMm: 120, verticalExaggeration: 3, includeWaterCap: false, format: 'binary' }).triangles, 'Test');
 console.log('binary STL bytes', bin.byteLength);
 if (failures) { console.error(`${failures} check(s) failed`); process.exit(1); }

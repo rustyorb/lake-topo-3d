@@ -1,4 +1,4 @@
-import { GroundingSource, LakeMetadata, TerrainGridData, TopoFeature } from '../src/types.js';
+import { GroundingSource, LakeMetadata, SpotElevation, SurveyContourLine, TerrainGridData, TopoFeature } from '../src/types.js';
 import { performAiRecon, readChartImage, llmAvailable, llmDescription } from './aiRecon.js';
 import { MIDWESTERN_LAKES, PredefinedLake } from './lakeData.js';
 import { generateSvgTopoMap } from './topoMapGenerator.js';
@@ -504,6 +504,63 @@ const CACHE_TTL_MS = 60 * 60 * 1000;
 const CACHE_MAX = 40;
 export const MAX_GRID = 160;
 
+/**
+ * Native survey contour polylines re-expressed in fractional grid coordinates so the SVG map
+ * and the 3D viewer can draw the surveyed lines themselves rather than a re-contoured grid.
+ * Points outside the frame are dropped and the line is split there.
+ */
+function surveyContoursToGrid(survey: IdnrSurvey, bounds: LakeMetadata['bounds'], size: number): SurveyContourLine[] {
+  const out: SurveyContourLine[] = [];
+  const lonSpan = Math.max(1e-12, bounds.maxLon - bounds.minLon);
+  const latSpan = Math.max(1e-12, bounds.maxLat - bounds.minLat);
+  for (const line of survey.contours) {
+    if (!(line.depthFt > 0) || line.coords.length < 2) continue;
+    let run: Array<[number, number]> = [];
+    const flush = () => {
+      if (run.length >= 2) out.push({ depthFt: line.depthFt, points: run });
+      run = [];
+    };
+    for (const p of line.coords) {
+      const col = ((p.lon - bounds.minLon) / lonSpan) * (size - 1);
+      const row = ((bounds.maxLat - p.lat) / latSpan) * (size - 1);
+      if (col < -0.5 || row < -0.5 || col > size - 0.5 || row > size - 0.5) { flush(); continue; }
+      run.push([Math.round(col * 100) / 100, Math.round(row * 100) / 100]);
+    }
+    flush();
+  }
+  return out;
+}
+
+/** Local DEM maxima on land, spaced out, like the spot heights printed on a paper topo. */
+function computeSpotElevations(elevations: number[][], waterMask: boolean[][], size: number, waterElevationM: number, max = 6): SpotElevation[] {
+  const rad = Math.max(3, Math.round(size / 16));
+  const cands: Array<{ row: number; col: number; elev: number }> = [];
+  for (let r = 1; r < size - 1; r++) {
+    for (let c = 1; c < size - 1; c++) {
+      if (waterMask[r][c]) continue;
+      const e = elevations[r][c];
+      if (e < waterElevationM + 3) continue; // ignore the bank itself
+      let isMax = true;
+      for (let dr = -rad; dr <= rad && isMax; dr++) {
+        for (let dc = -rad; dc <= rad; dc++) {
+          const rr = r + dr, cc = c + dc;
+          if (rr < 0 || cc < 0 || rr >= size || cc >= size || (!dr && !dc)) continue;
+          if (elevations[rr][cc] > e) { isMax = false; break; }
+        }
+      }
+      if (isMax) cands.push({ row: r, col: c, elev: e });
+    }
+  }
+  cands.sort((a, b) => b.elev - a.elev);
+  const kept: SpotElevation[] = [];
+  for (const k of cands) {
+    if (kept.some((x) => Math.hypot(x.row - k.row, x.col - k.col) < rad * 2)) continue;
+    kept.push({ row: k.row, col: k.col, elevFt: Math.round(k.elev * FT_PER_M) });
+    if (kept.length >= max) break;
+  }
+  return kept;
+}
+
 export function clearTerrainCache(): void {
   resultCache.clear();
 }
@@ -820,6 +877,12 @@ export async function generateLakeTerrainGrid(
     physicalWidthKm: Math.round(lonDistKm * 100) / 100,
     physicalHeightKm: Math.round(latDistKm * 100) / 100,
   };
+  if (survey && metadata.geometrySource === 'osm-dem' && metadata.bathymetrySource === 'idnr-sonar') {
+    partial.surveyContours = surveyContoursToGrid(survey, metadata.bounds, size);
+  }
+  if (metadata.geometrySource === 'osm-dem') {
+    partial.spotElevations = computeSpotElevations(grid.elevations, grid.waterMask, size, metadata.surfaceElevationM);
+  }
   partial.svgTopoMap = generateSvgTopoMap(partial);
 
   if (cacheKey) {

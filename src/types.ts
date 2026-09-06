@@ -82,6 +82,19 @@ export interface LakeMetadata {
   osmId?: string;
 }
 
+/** One native survey contour polyline in fractional grid coordinates ([col,row]); row 0 = north. */
+export interface SurveyContourLine {
+  depthFt: number;
+  points: Array<[number, number]>;
+}
+
+/** Spot height on land (local DEM maximum), like the "564 ft" marks on a paper map. */
+export interface SpotElevation {
+  row: number;
+  col: number;
+  elevFt: number;
+}
+
 export interface TerrainGridData {
   metadata: LakeMetadata;
   gridSize: number;
@@ -99,6 +112,10 @@ export interface TerrainGridData {
   physicalWidthKm: number;  // east-west extent of the grid
   physicalHeightKm: number; // north-south extent of the grid
   svgTopoMap?: string; // vector topographic contour map, generated server-side
+  /** Native survey contour vectors (IDNR sonar lines) when the lake has a survey. */
+  surveyContours?: SurveyContourLine[];
+  /** Spot elevations on land, computed from the DEM. */
+  spotElevations?: SpotElevation[];
 }
 
 export interface STLOptions {
@@ -123,4 +140,5 @@ export type ColorSchemeMode =
   | 'topographic'   // USGS style contour bands (terracotta, buff, olive, blue)
   | 'satellite'     // Earth natural tones (forest, sand, deep water)
   | 'print-resin'   // Sleek matte white/grey PLA 3D-print simulation
-  | 'slate';        // Dark architectural stone theme
+  | 'slate'         // Dark architectural stone theme
+  | 'fishing-chart'; // Navionics-style 5 ft depth bands, flat tan land

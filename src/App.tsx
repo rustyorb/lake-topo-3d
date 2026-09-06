@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { 
   Search, 
   Printer, 
@@ -25,13 +25,19 @@ import {
   Columns3,
   Box
 } from 'lucide-react';
-import { Lake3DViewer, WaterDisplayMode } from './components/Lake3DViewer.js';
+import { Lake3DViewer, WaterDisplayMode, ThermoclineBand, ViewerMarker, ProbeInfo } from './components/Lake3DViewer.js';
 import { STLExportDialog } from './components/STLExportDialog.js';
-import { TopoMapViewer } from './components/TopoMapViewer.js';
+import { TopoMapViewer, MapMarker } from './components/TopoMapViewer.js';
 import { GenerativeTopoPanel } from './components/GenerativeTopoPanel.js';
+import { FishingPanel } from './components/FishingPanel.js';
 import { ColorSchemeMode, TerrainGridData, TerrainShadingStyle } from './types.js';
 import { suggestExaggeration } from './utils/stlExporter.js';
 import { describeBathymetry, describeDem, describeGeometry, describeMethod } from './lib/labels.js';
+import { analyzeStructure, gridToLatLon, STRUCTURE_STYLE, StructureFeature, StructureKind } from './lib/structure.js';
+import { Waypoint, loadWaypoints, saveWaypoints, newWaypointId, nextWaypointName } from './lib/waypoints.js';
+
+const FT_PER_M = 3.28084;
+const WAYPOINT_COLOR = 0xfacc15;
 
 const POPULAR_LAKES = [
   { label: 'Deam Lake, IN', query: 'Deam Lake, Indiana' },
@@ -94,7 +100,65 @@ export default function App() {
   const [isOverviewExpanded, setIsOverviewExpanded] = useState<boolean>(false);
 
   // Live cursor probe
-  const [probeInfo, setProbeInfo] = useState<{ elevationFt: number; depthFt: number; isWater: boolean } | null>(null);
+  const [probeInfo, setProbeInfo] = useState<ProbeInfo | null>(null);
+
+  // Fishing layer
+  const [showStructure, setShowStructure] = useState<boolean>(true);
+  const [hiddenKinds, setHiddenKinds] = useState<StructureKind[]>([]);
+  const [thermocline, setThermocline] = useState<ThermoclineBand>({ enabled: false, minFt: 18, maxFt: 28 });
+  const [waypoints, setWaypoints] = useState<Waypoint[]>([]);
+  const [selectedMarkerId, setSelectedMarkerId] = useState<string | null>(null);
+  const [pinMode, setPinMode] = useState<boolean>(false);
+  const [focusRequest, setFocusRequest] = useState<{ row: number; col: number; nonce: number } | null>(null);
+  const [useSurveyContours, setUseSurveyContours] = useState<boolean>(true);
+
+  const structure = useMemo<StructureFeature[]>(() => (gridData ? analyzeStructure(gridData) : []), [gridData]);
+  const lakeId = gridData?.metadata.id;
+  useEffect(() => {
+    setWaypoints(lakeId ? loadWaypoints(lakeId) : []);
+    setSelectedMarkerId(null);
+    setFocusRequest(null);
+  }, [lakeId]);
+
+  const updateWaypoints = useCallback((next: Waypoint[]) => {
+    setWaypoints(next);
+    if (lakeId) saveWaypoints(lakeId, next);
+  }, [lakeId]);
+
+  const addWaypoint = useCallback((row: number, col: number, extra?: Partial<Waypoint>) => {
+    if (!gridData) return;
+    const r = Math.max(0, Math.min(gridData.gridSize - 1, Math.round(row)));
+    const c = Math.max(0, Math.min(gridData.gridSize - 1, Math.round(col)));
+    const { lat, lon } = gridToLatLon(gridData, row, col);
+    const wp: Waypoint = {
+      id: newWaypointId(),
+      name: nextWaypointName(waypoints),
+      lat, lon, row, col,
+      depthFt: Math.round(gridData.depths[r][c] * FT_PER_M * 10) / 10,
+      elevFt: Math.round(gridData.elevations[r][c] * FT_PER_M),
+      createdAt: new Date().toISOString(),
+      source: 'manual',
+      ...extra,
+    };
+    updateWaypoints([...waypoints, wp]);
+    setSelectedMarkerId(wp.id);
+  }, [gridData, waypoints, updateWaypoints]);
+
+  const addWaypointFromFeature = useCallback((f: StructureFeature) => {
+    addWaypoint(f.row, f.col, { name: `${f.label} ${f.depthFt} ft`, note: f.detail, source: 'structure', kind: f.kind });
+  }, [addWaypoint]);
+
+  const focusOn = useCallback((row: number, col: number) => setFocusRequest({ row, col, nonce: Date.now() }), []);
+
+  const visibleStructure = useMemo(() => (showStructure ? structure.filter((f) => !hiddenKinds.includes(f.kind)) : []), [structure, hiddenKinds, showStructure]);
+  const markers3d = useMemo<ViewerMarker[]>(() => [
+    ...visibleStructure.map((f) => ({ id: f.id, row: f.row, col: f.col, color: STRUCTURE_STYLE[f.kind].hex, label: `${f.label} · ${f.depthFt} ft`, detail: f.detail, shape: 'sphere' as const })),
+    ...waypoints.map((w) => ({ id: w.id, row: w.row, col: w.col, color: WAYPOINT_COLOR, label: w.name, detail: `${w.depthFt > 0 ? `${w.depthFt} ft` : `${w.elevFt} ft elev`} · ${w.lat.toFixed(5)}, ${w.lon.toFixed(5)}${w.note ? ` · ${w.note}` : ''}`, shape: 'pin' as const })),
+  ], [visibleStructure, waypoints]);
+  const markers2d = useMemo<MapMarker[]>(() => [
+    ...visibleStructure.map((f) => ({ id: f.id, row: f.row, col: f.col, color: STRUCTURE_STYLE[f.kind].color, label: `${f.label} · ${f.depthFt} ft`, detail: f.detail, shape: 'dot' as const })),
+    ...waypoints.map((w) => ({ id: w.id, row: w.row, col: w.col, color: '#facc15', label: w.name, detail: w.depthFt > 0 ? `${w.depthFt} ft` : 'land', shape: 'pin' as const })),
+  ], [visibleStructure, waypoints]);
 
   // Fetch lake data with optional AI recon and user notes
   const fetchLakeData = useCallback(async (query: string, options?: { forceAiRecon?: boolean; userNotes?: string }) => {
@@ -190,11 +254,11 @@ export default function App() {
                 <h1 className="text-base font-bold tracking-tight text-white flex items-center gap-2">
                   Lake Topo 3D
                   <span className="text-[10px] uppercase font-semibold tracking-wider px-2 py-0.5 rounded-full bg-sky-500/10 text-sky-400 border border-sky-500/20">
-                    Topo & STL
+                    Topo · Fishing · STL
                   </span>
                 </h1>
                 <p className="text-[11px] text-slate-400">
-                  Real shorelines & elevation → printable 3D terrain
+                  Surveyed bathymetry → structure, waypoints, 3D model, printable STL
                 </p>
               </div>
             </div>
@@ -318,6 +382,7 @@ export default function App() {
               <span className={probeInfo.isWater ? 'text-cyan-400' : 'text-emerald-400'}>
                 {probeInfo.isWater ? `Water Depth: ${probeInfo.depthFt} ft` : `Land Elev: ${probeInfo.elevationFt} ft`}
               </span>
+              <span className="text-slate-500">{probeInfo.lat.toFixed(5)}, {probeInfo.lon.toFixed(5)}</span>
             </div>
           )}
         </div>
@@ -377,6 +442,15 @@ export default function App() {
                         onUpdateWaterMode={handleWaterModeChange}
                         onUpdateWaterLevelOffsetFt={setWaterLevelOffsetFt}
                         onProbeInfo={setProbeInfo}
+                        useSurveyContours={useSurveyContours}
+                        thermocline={thermocline}
+                        markers={markers3d}
+                        selectedMarkerId={selectedMarkerId}
+                        pinMode={pinMode}
+                        focusRequest={focusRequest}
+                        onDropPin={(cell) => addWaypoint(cell.row, cell.col)}
+                        onSelectMarker={setSelectedMarkerId}
+                        onTogglePinMode={setPinMode}
                       />
                     </div>
                   )}
@@ -384,7 +458,7 @@ export default function App() {
                   {/* Mode 2: 2D Topo Map Only */}
                   {viewMode === 'topo' && (
                     <div className="w-full h-full flex-1 min-h-[520px]">
-                      <TopoMapViewer gridData={gridData} />
+                      <TopoMapViewer gridData={gridData} markers={markers2d} selectedMarkerId={selectedMarkerId} pinMode={pinMode} onDropPin={(cell) => addWaypoint(cell.row, cell.col)} onSelectMarker={setSelectedMarkerId} />
                     </div>
                   )}
 
@@ -415,10 +489,19 @@ export default function App() {
                           onUpdateWaterMode={handleWaterModeChange}
                           onUpdateWaterLevelOffsetFt={setWaterLevelOffsetFt}
                           onProbeInfo={setProbeInfo}
+                          useSurveyContours={useSurveyContours}
+                          thermocline={thermocline}
+                          markers={markers3d}
+                          selectedMarkerId={selectedMarkerId}
+                          pinMode={pinMode}
+                          focusRequest={focusRequest}
+                          onDropPin={(cell) => addWaypoint(cell.row, cell.col)}
+                          onSelectMarker={setSelectedMarkerId}
+                          onTogglePinMode={setPinMode}
                         />
                       </div>
                       <div className="h-[520px] rounded-xl overflow-hidden border border-slate-800">
-                        <TopoMapViewer gridData={gridData} />
+                        <TopoMapViewer gridData={gridData} markers={markers2d} selectedMarkerId={selectedMarkerId} pinMode={pinMode} onDropPin={(cell) => addWaypoint(cell.row, cell.col)} onSelectMarker={setSelectedMarkerId} />
                       </div>
                     </div>
                   )}
@@ -472,7 +555,31 @@ export default function App() {
 
           {/* Right Column: 3D Manipulation Panel FIRST, then Overview & Generative Recon */}
           <div className="lg:col-span-4 flex flex-col gap-4 lg:sticky lg:top-4 self-start">
-            {/* 3D Manipulation Controls Panel - At the very top so it's always visible alongside the 3D object */}
+            {/* Fishing layer: structure, thermocline band, waypoints */}
+            {gridData && (
+              <FishingPanel
+                gridData={gridData}
+                structure={structure}
+                hiddenKinds={hiddenKinds}
+                onToggleKind={(k) => setHiddenKinds((h) => (h.includes(k) ? h.filter((x) => x !== k) : [...h, k]))}
+                showStructure={showStructure}
+                onToggleStructure={setShowStructure}
+                thermocline={thermocline}
+                onThermoclineChange={setThermocline}
+                waypoints={waypoints}
+                onUpdateWaypoints={updateWaypoints}
+                onAddWaypointFromFeature={addWaypointFromFeature}
+                selectedId={selectedMarkerId}
+                onSelect={setSelectedMarkerId}
+                onFocus={focusOn}
+                pinMode={pinMode}
+                onTogglePinMode={setPinMode}
+                useSurveyContours={useSurveyContours}
+                onToggleSurveyContours={setUseSurveyContours}
+              />
+            )}
+
+            {/* 3D Manipulation Controls Panel */}
             <div className="bg-slate-900 border border-slate-800/90 rounded-2xl p-5 shadow-xl space-y-4">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
@@ -624,6 +731,7 @@ export default function App() {
                     { id: 'satellite', label: 'Natural Earth' },
                     { id: 'print-resin', label: '3D Print PLA' },
                     { id: 'slate', label: 'Architect' },
+                    { id: 'fishing-chart', label: 'Fishing Chart' },
                   ].map((mode) => (
                     <button
                       key={mode.id}

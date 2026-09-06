@@ -49,8 +49,24 @@ export function suggestExaggeration(data: TerrainGridData, targetWidthMm: number
   return Math.round(Math.max(1, Math.min(25, want / trueReliefMm)) * 10) / 10;
 }
 
+export type MaterialPart = 'land' | 'water';
+
 /**
- * Builds a watertight solid from the terrain grid: heightfield top, flat bottom plate and 4 walls.
+ * Which material a grid quad (the cell between four grid vertices) belongs to.
+ * A quad is lake bed when at least three of its corners are water, so the blue part
+ * stays inside the shoreline and the two parts tile the frame exactly.
+ */
+export function quadMaterial(data: TerrainGridData, r: number, c: number): MaterialPart {
+  const w = data.waterMask;
+  const n = (w[r][c] ? 1 : 0) + (w[r][c + 1] ? 1 : 0) + (w[r + 1][c] ? 1 : 0) + (w[r + 1][c + 1] ? 1 : 0);
+  return n >= 3 ? 'water' : 'land';
+}
+
+/**
+ * Builds a watertight solid from the terrain grid: heightfield top, flat bottom plate and walls.
+ * When `quadMask` is given only those quads are built and vertical walls close every edge where
+ * the neighbouring quad is missing, so a masked region is itself a closed solid that mates
+ * exactly with the solid built from the complementary mask.
  *
  * Coordinate frame (slicer-friendly, Z-up, north-up):
  *   +X = east, +Y = north, +Z = up.  Row 0 of the grid is the north edge, so it maps to y = length.
@@ -58,7 +74,8 @@ export function suggestExaggeration(data: TerrainGridData, targetWidthMm: number
  */
 export function generateWatertightSTLMesh(
   data: TerrainGridData,
-  options: STLOptions
+  options: STLOptions,
+  quadMask?: (r: number, c: number) => boolean
 ): { triangles: Triangle[]; stats: MeshStats } {
   const { gridSize, elevations, minElevation } = data;
   const { baseThicknessMm, targetWidthMm, verticalExaggeration, includeWaterCap } = options;
@@ -90,8 +107,6 @@ export function generateWatertightSTLMesh(
         reliefM = Math.floor(reliefM / stepM) * stepM;
       }
       const zMm = baseThicknessMm + reliefM * mmPerMetreV;
-      lowestTopZ = Math.min(lowestTopZ, zMm);
-      highestTopZ = Math.max(highestTopZ, zMm);
       topVerts[r][c] = { x: xMm, y: yMm, z: zMm };
       bottomVerts[r][c] = { x: xMm, y: yMm, z: 0 };
     }
@@ -106,39 +121,34 @@ export function generateWatertightSTLMesh(
 
   const UP = { x: 0, y: 0, z: 1 };
   const DOWN = { x: 0, y: 0, z: -1 };
+  const NORTH = { x: 0, y: 1, z: 0 }, SOUTH = { x: 0, y: -1, z: 0 }, EAST = { x: 1, y: 0, z: 0 }, WEST = { x: -1, y: 0, z: 0 };
+  const inMask = (r: number, c: number) => r >= 0 && c >= 0 && r < gridSize - 1 && c < gridSize - 1 && (!quadMask || quadMask(r, c));
 
-  // 1. Top heightfield (normals up) and 2. bottom plate (normals down)
+  // A wall along the edge between grid vertices (ra,ca)-(rb,cb), from the plate up to the heightfield.
+  const wall = (ra: number, ca: number, rb: number, cb: number, outward: Point3D) => {
+    pushTri(topVerts[ra][ca], topVerts[rb][cb], bottomVerts[rb][cb], outward);
+    pushTri(topVerts[ra][ca], bottomVerts[rb][cb], bottomVerts[ra][ca], outward);
+  };
+
   for (let r = 0; r < gridSize - 1; r++) {
     for (let c = 0; c < gridSize - 1; c++) {
+      if (!inMask(r, c)) continue;
+      // 1. Top heightfield (normals up) and 2. bottom plate (normals down)
       const t00 = topVerts[r][c], t01 = topVerts[r][c + 1], t10 = topVerts[r + 1][c], t11 = topVerts[r + 1][c + 1];
+      for (const v of [t00, t01, t10, t11]) { lowestTopZ = Math.min(lowestTopZ, v.z); highestTopZ = Math.max(highestTopZ, v.z); }
       pushTri(t00, t10, t11, UP);
       pushTri(t00, t11, t01, UP);
       const b00 = bottomVerts[r][c], b01 = bottomVerts[r][c + 1], b10 = bottomVerts[r + 1][c], b11 = bottomVerts[r + 1][c + 1];
       pushTri(b00, b10, b11, DOWN);
       pushTri(b00, b11, b01, DOWN);
+      // 3. Walls wherever the neighbouring quad is absent (frame edge or the other material)
+      if (!inMask(r - 1, c)) wall(r, c, r, c + 1, NORTH);
+      if (!inMask(r + 1, c)) wall(r + 1, c, r + 1, c + 1, SOUTH);
+      if (!inMask(r, c - 1)) wall(r, c, r + 1, c, WEST);
+      if (!inMask(r, c + 1)) wall(r, c + 1, r + 1, c + 1, EAST);
     }
   }
-
-  // 3. Walls. Each wall quad shares its top edge with the heightfield and its bottom edge with the plate.
-  const lastR = gridSize - 1;
-  const lastC = gridSize - 1;
-  const NORTH = { x: 0, y: 1, z: 0 }, SOUTH = { x: 0, y: -1, z: 0 }, EAST = { x: 1, y: 0, z: 0 }, WEST = { x: -1, y: 0, z: 0 };
-  for (let c = 0; c < gridSize - 1; c++) {
-    // North wall (row 0)
-    pushTri(topVerts[0][c], topVerts[0][c + 1], bottomVerts[0][c + 1], NORTH);
-    pushTri(topVerts[0][c], bottomVerts[0][c + 1], bottomVerts[0][c], NORTH);
-    // South wall (last row)
-    pushTri(topVerts[lastR][c], topVerts[lastR][c + 1], bottomVerts[lastR][c + 1], SOUTH);
-    pushTri(topVerts[lastR][c], bottomVerts[lastR][c + 1], bottomVerts[lastR][c], SOUTH);
-  }
-  for (let r = 0; r < gridSize - 1; r++) {
-    // West wall (col 0)
-    pushTri(topVerts[r][0], topVerts[r + 1][0], bottomVerts[r + 1][0], WEST);
-    pushTri(topVerts[r][0], bottomVerts[r + 1][0], bottomVerts[r][0], WEST);
-    // East wall (last col)
-    pushTri(topVerts[r][lastC], topVerts[r + 1][lastC], bottomVerts[r + 1][lastC], EAST);
-    pushTri(topVerts[r][lastC], bottomVerts[r + 1][lastC], bottomVerts[r][lastC], EAST);
-  }
+  if (!triangles.length) { lowestTopZ = 0; highestTopZ = 0; }
 
   const round1 = (v: number) => Math.round(v * 10) / 10;
   return {
@@ -155,6 +165,123 @@ export function generateWatertightSTLMesh(
       mmPerMetreVertical: mmPerMetreV,
     },
   };
+}
+
+/**
+ * The same model as two mating solids: everything under land, and everything under the lake bed.
+ * Import both into the slicer as parts of one object and give the lake part its own filament.
+ */
+export function generateSplitMeshes(data: TerrainGridData, options: STLOptions): { land: { triangles: Triangle[]; stats: MeshStats }; water: { triangles: Triangle[]; stats: MeshStats } } {
+  return {
+    land: generateWatertightSTLMesh(data, options, (r, c) => quadMaterial(data, r, c) === 'land'),
+    water: generateWatertightSTLMesh(data, options, (r, c) => quadMaterial(data, r, c) === 'water'),
+  };
+}
+
+// ------------------------------------------------------------------ 3MF (zip of XML)
+
+export interface MfPart { name: string; triangles: Triangle[]; colorHex: string }
+
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+
+function crc32(bytes: Uint8Array): number {
+  let c = 0xffffffff;
+  for (let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
+
+/** Minimal ZIP writer (stored, no compression) — enough for a 3MF container. */
+function zipStore(files: Array<{ name: string; data: Uint8Array }>): ArrayBuffer {
+  const enc = new TextEncoder();
+  const locals: Uint8Array[] = [];
+  const centrals: Uint8Array[] = [];
+  let offset = 0;
+  for (const f of files) {
+    const name = enc.encode(f.name);
+    const crc = crc32(f.data);
+    const local = new Uint8Array(30 + name.length + f.data.length);
+    const lv = new DataView(local.buffer);
+    lv.setUint32(0, 0x04034b50, true); lv.setUint16(4, 20, true); lv.setUint16(6, 0, true); lv.setUint16(8, 0, true);
+    lv.setUint16(10, 0, true); lv.setUint16(12, 0x21, true); lv.setUint32(14, crc, true);
+    lv.setUint32(18, f.data.length, true); lv.setUint32(22, f.data.length, true);
+    lv.setUint16(26, name.length, true); lv.setUint16(28, 0, true);
+    local.set(name, 30); local.set(f.data, 30 + name.length);
+    const central = new Uint8Array(46 + name.length);
+    const cv = new DataView(central.buffer);
+    cv.setUint32(0, 0x02014b50, true); cv.setUint16(4, 20, true); cv.setUint16(6, 20, true); cv.setUint16(8, 0, true); cv.setUint16(10, 0, true);
+    cv.setUint16(12, 0, true); cv.setUint16(14, 0x21, true); cv.setUint32(16, crc, true);
+    cv.setUint32(20, f.data.length, true); cv.setUint32(24, f.data.length, true);
+    cv.setUint16(28, name.length, true); cv.setUint16(30, 0, true); cv.setUint16(32, 0, true); cv.setUint16(34, 0, true); cv.setUint16(36, 0, true);
+    cv.setUint32(38, 0, true); cv.setUint32(42, offset, true);
+    central.set(name, 46);
+    locals.push(local); centrals.push(central);
+    offset += local.length;
+  }
+  const cdSize = centrals.reduce((a, b) => a + b.length, 0);
+  const end = new Uint8Array(22);
+  const ev = new DataView(end.buffer);
+  ev.setUint32(0, 0x06054b50, true); ev.setUint16(4, 0, true); ev.setUint16(6, 0, true);
+  ev.setUint16(8, files.length, true); ev.setUint16(10, files.length, true);
+  ev.setUint32(12, cdSize, true); ev.setUint32(16, offset, true); ev.setUint16(20, 0, true);
+  const out = new Uint8Array(offset + cdSize + 22);
+  let p = 0;
+  for (const l of locals) { out.set(l, p); p += l.length; }
+  for (const c of centrals) { out.set(c, p); p += c.length; }
+  out.set(end, p);
+  return out.buffer;
+}
+
+/**
+ * Encodes parts as one 3MF object with a component per part (a multi-part object in
+ * Bambu Studio / PrusaSlicer / Cura), each part carrying a base material colour.
+ */
+export function encode3MF(parts: MfPart[], modelName: string): ArrayBuffer {
+  const esc = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const objects: string[] = [];
+  const components: string[] = [];
+  const materials = parts.map((p, i) => `<base name="${esc(p.name)}" displaycolor="${p.colorHex.replace('#', '#').toUpperCase()}FF"/>`).join('');
+  parts.forEach((part, i) => {
+    const verts: string[] = [];
+    const index = new Map<string, number>();
+    const tris: string[] = [];
+    const vid = (v: Point3D) => {
+      const k = `${v.x.toFixed(4)},${v.y.toFixed(4)},${v.z.toFixed(4)}`;
+      let id = index.get(k);
+      if (id === undefined) { id = verts.length; index.set(k, id); verts.push(`<vertex x="${v.x.toFixed(4)}" y="${v.y.toFixed(4)}" z="${v.z.toFixed(4)}"/>`); }
+      return id;
+    };
+    for (const t of part.triangles) tris.push(`<triangle v1="${vid(t.v1)}" v2="${vid(t.v2)}" v3="${vid(t.v3)}"/>`);
+    const id = 2 + i;
+    objects.push(`<object id="${id}" name="${esc(part.name)}" type="model" pid="1" pindex="${i}"><mesh><vertices>${verts.join('')}</vertices><triangles>${tris.join('')}</triangles></mesh></object>`);
+    components.push(`<component objectid="${id}"/>`);
+  });
+  const rootId = 2 + parts.length;
+  const model = `<?xml version="1.0" encoding="UTF-8"?>
+<model unit="millimeter" xml:lang="en-US" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">
+<metadata name="Title">${esc(modelName)}</metadata><metadata name="Application">Lake Topo 3D</metadata>
+<resources><basematerials id="1">${materials}</basematerials>${objects.join('')}<object id="${rootId}" name="${esc(modelName)}" type="model"><components>${components.join('')}</components></object></resources>
+<build><item objectid="${rootId}"/></build>
+</model>`;
+  const contentTypes = `<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/></Types>`;
+  const rels = `<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Target="/3D/3dmodel.model" Id="rel0" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/></Relationships>`;
+  const enc = new TextEncoder();
+  return zipStore([
+    { name: '[Content_Types].xml', data: enc.encode(contentTypes) },
+    { name: '_rels/.rels', data: enc.encode(rels) },
+    { name: '3D/3dmodel.model', data: enc.encode(model) },
+  ]);
+}
+
+export function exportTo3MF(parts: MfPart[], modelName: string): Blob {
+  return new Blob([encode3MF(parts, modelName)], { type: 'model/3mf' });
 }
 
 /** Encodes triangles as binary STL (little-endian, 80-byte header). */

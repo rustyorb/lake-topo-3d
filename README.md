@@ -49,6 +49,8 @@ Everything below is computed from the depth grid in the browser (`src/lib/struct
 
 Heightfield + flat base + walls, verified closed manifold (`npm run verify`). +X east, +Y north, +Z up. Vertical exaggeration is a multiple of true scale (1.0x = same mm/m as the horizontal axes); "auto-fit" picks a printable relief. Midwestern lakes are nearly flat at 1x, so 3x–8x is typical.
 
+**Depth boost** exaggerates the lake bed on top of that without touching the land. Both are anchored at the water surface, so the shoreline stays continuous. A reservoir in the hills (Deam Lake: ~40 ft of depth inside ~200 ft of surrounding relief) prints its bed as a sliver at one global scale; "fishing fit" picks the boost that makes the bed as tall as the land is high. The viewer and the STL/3MF use the same numbers. Pair it with the **Lake only** frame for a print that is mostly bathymetry.
+
 **Multi-material**: "Land + lake STLs" writes two mating solids in the same frame (every grid cell inside the shoreline, cut vertically from the bed to the base, is the lake part). Import both into Bambu Studio / PrusaSlicer as one object with multiple parts and give the lake part its own filament. "3MF, 2 parts" writes one object with a land component and a lake component, each with a base-material colour hint. The verify script checks that both parts are closed and that their volumes sum to the single solid's.
 
 ## Environment
@@ -62,7 +64,7 @@ See `.env.example`. Highlights: `PORT`, `LLM_PROVIDER` / `LLM_MODEL` / `LLM_BASE
 | `/api/health` | GET | Status, LLM provider/model in use, geodata enabled |
 | `/api/lakes` | GET | Curated lake registry (metadata only) |
 | `/api/lookup?q=` | GET | Shoreline lookup only: name, centroid, area, OSM id |
-| `/api/lake-terrain?q=&gridSize=&forceAiRecon=&userNotes=&offline=` | GET | Full terrain grid + SVG map |
+| `/api/lake-terrain?q=&gridSize=&forceAiRecon=&userNotes=&offline=&framePad=` | GET | Full terrain grid + SVG map (`framePad` = padding around the lake as a fraction of its longer side, default 0.28; 0.06 gives a lake-only frame) |
 | `/api/lake-terrain` | POST | Same as GET; JSON body may include `uploadedImage {base64, mimeType}` |
 | `/api/analyze-topo-image` | POST | Vision read of an uploaded chart (`imageBase64`, `mimeType`, `query`, `gridSize`); needs an LLM |
 | `/api/ai-topo-recon` | POST | LLM recon (`query`, `userNotes`, `gridSize`); needs an LLM |

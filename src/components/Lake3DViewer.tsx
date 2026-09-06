@@ -4,6 +4,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { ColorSchemeMode, TerrainGridData, TerrainShadingStyle } from '../types.js';
 import { fieldFrom2D, isolines, levelRange, sampleBilinear } from '../lib/contours.js';
 import { gridToLatLon } from '../lib/structure.js';
+import { boostedElevation, boostedMinElevation } from '../lib/relief.js';
 import { Compass, RotateCcw, Eye, Waves, Mountain, MapPin } from 'lucide-react';
 
 export type WaterDisplayMode = 'carved-bed' | 'translucent' | 'filled';
@@ -53,6 +54,8 @@ interface Lake3DViewerProps {
   terraceStepFt?: number;
   flatShading?: boolean;
   terrainSharpness?: number;
+  /** Extra vertical multiplier on the lake bed only (1 = none). */
+  depthBoost?: number;
   /** Drape the native survey contour vectors instead of re-contouring the grid (when available). */
   useSurveyContours?: boolean;
   thermocline?: ThermoclineBand;
@@ -107,6 +110,7 @@ export const Lake3DViewer: React.FC<Lake3DViewerProps> = ({
   terraceStepFt = 5,
   flatShading = true,
   terrainSharpness = 1.6,
+  depthBoost = 1,
   useSurveyContours = true,
   thermocline,
   markers = [],
@@ -307,7 +311,7 @@ export const Lake3DViewer: React.FC<Lake3DViewerProps> = ({
 
   const xOf = (c: number) => (c / (gridData.gridSize - 1) - 0.5) * MODEL_WIDTH;
   const zOf = (r: number) => (r / (gridData.gridSize - 1) - 0.5) * modelLength(gridData);
-  const yOf = (elevM: number) => (elevM - gridData.minElevation) * verticalScale(gridData, verticalExaggeration);
+  const yOf = (elevM: number) => (elevM - boostedMinElevation(gridData, depthBoost)) * verticalScale(gridData, verticalExaggeration);
 
   // ---- terrain, base and contour lines
   useEffect(() => {
@@ -317,17 +321,21 @@ export const Lake3DViewer: React.FC<Lake3DViewerProps> = ({
     disposeObject(baseMeshRef.current); baseMeshRef.current = null;
     disposeObject(contourGroupRef.current); contourGroupRef.current = null;
 
-    const { gridSize, elevations, waterMask, depths, minElevation, maxElevation, waterElevation } = gridData;
+    const { gridSize, elevations, waterMask, depths, maxElevation, waterElevation } = gridData;
+    const minElevation = boostedMinElevation(gridData, depthBoost);
     const length = modelLength(gridData);
     const zScale = verticalScale(gridData, verticalExaggeration);
     const baseBottomY = -5 * baseThicknessRatio;
 
-    // Transformed elevation field (shading styles alter the heights)
+    // Transformed elevation field (shading styles alter the heights). `shaped` keeps true depths for
+    // contour levels; `shapedBoosted` is what the mesh is built from (bed pushed down by depthBoost).
     const shaped: number[][] = [];
+    const shapedBoosted: number[][] = [];
     const stepM = (terraceStepFt || 5) * 0.3048;
     const sharp = terrainSharpness || 1.8;
     for (let r = 0; r < gridSize; r++) {
       shaped[r] = [];
+      shapedBoosted[r] = [];
       for (let c = 0; c < gridSize; c++) {
         let elevM = elevations[r][c];
         let depthM = depths[r][c];
@@ -351,9 +359,10 @@ export const Lake3DViewer: React.FC<Lake3DViewerProps> = ({
           }
         }
         shaped[r][c] = elevM;
+        shapedBoosted[r][c] = boostedElevation(elevM, waterElevation, isWater, depthBoost);
       }
     }
-    shapedRef.current = shaped;
+    shapedRef.current = shapedBoosted;
 
     const positions: number[] = [];
     const colors: number[] = [];
@@ -363,10 +372,10 @@ export const Lake3DViewer: React.FC<Lake3DViewerProps> = ({
 
     for (let r = 0; r < gridSize; r++) {
       for (let c = 0; c < gridSize; c++) {
-        positions.push(xOf(c), yOfLocal(shaped[r][c]), zOf(r));
+        positions.push(xOf(c), yOfLocal(shapedBoosted[r][c]), zOf(r));
         uvs.push(c / (gridSize - 1), r / (gridSize - 1));
         // Colour from the true depth so thermocline/chart bands stay honest under terrace styling
-        const col = getVertexColor(shaped[r][c], depths[r][c], waterMask[r][c], maxElevation, waterElevation);
+        const col = getVertexColor(shapedBoosted[r][c], depths[r][c], waterMask[r][c], maxElevation, waterElevation);
         colors.push(col.r, col.g, col.b);
       }
     }
@@ -412,12 +421,12 @@ export const Lake3DViewer: React.FC<Lake3DViewerProps> = ({
       };
       const last = gridSize - 1;
       for (let c = 0; c < last; c++) {
-        quad(xOf(c), yOfLocal(shaped[0][c]), zOf(0), xOf(c + 1), yOfLocal(shaped[0][c + 1]), zOf(0));
-        quad(xOf(c + 1), yOfLocal(shaped[last][c + 1]), zOf(last), xOf(c), yOfLocal(shaped[last][c]), zOf(last));
+        quad(xOf(c), yOfLocal(shapedBoosted[0][c]), zOf(0), xOf(c + 1), yOfLocal(shapedBoosted[0][c + 1]), zOf(0));
+        quad(xOf(c + 1), yOfLocal(shapedBoosted[last][c + 1]), zOf(last), xOf(c), yOfLocal(shapedBoosted[last][c]), zOf(last));
       }
       for (let r = 0; r < last; r++) {
-        quad(xOf(0), yOfLocal(shaped[r + 1][0]), zOf(r + 1), xOf(0), yOfLocal(shaped[r][0]), zOf(r));
-        quad(xOf(last), yOfLocal(shaped[r][last]), zOf(r), xOf(last), yOfLocal(shaped[r + 1][last]), zOf(r + 1));
+        quad(xOf(0), yOfLocal(shapedBoosted[r + 1][0]), zOf(r + 1), xOf(0), yOfLocal(shapedBoosted[r][0]), zOf(r));
+        quad(xOf(last), yOfLocal(shapedBoosted[r][last]), zOf(r), xOf(last), yOfLocal(shapedBoosted[r + 1][last]), zOf(r + 1));
       }
       basePos.push(-MODEL_WIDTH / 2, baseBottomY, -length / 2, -MODEL_WIDTH / 2, baseBottomY, length / 2, MODEL_WIDTH / 2, baseBottomY, length / 2, MODEL_WIDTH / 2, baseBottomY, -length / 2);
       baseIdx.push(idx, idx + 1, idx + 2, idx, idx + 2, idx + 3);
@@ -453,8 +462,8 @@ export const Lake3DViewer: React.FC<Lake3DViewerProps> = ({
         const [x0, y0] = pts[k - 1];
         const [x1, y1] = pts[k];
         target.push(
-          xOf(x0), yOfLocal(sampleBilinear(shaped, x0, y0)) + lift, zOf(y0),
-          xOf(x1), yOfLocal(sampleBilinear(shaped, x1, y1)) + lift, zOf(y1)
+          xOf(x0), yOfLocal(sampleBilinear(shapedBoosted, x0, y0)) + lift, zOf(y0),
+          xOf(x1), yOfLocal(sampleBilinear(shapedBoosted, x1, y1)) + lift, zOf(y1)
         );
       }
     };
@@ -505,7 +514,7 @@ export const Lake3DViewer: React.FC<Lake3DViewerProps> = ({
       scene.add(group);
       contourGroupRef.current = group;
     }
-  }, [gridData, verticalExaggeration, baseThicknessRatio, colorScheme, showSolidBase, showContours, contourIntervalFt, shadingStyle, terraceStepFt, flatShading, terrainSharpness, useSurveyContours, thermocline?.enabled, thermocline?.minFt, thermocline?.maxFt]);
+  }, [gridData, verticalExaggeration, depthBoost, baseThicknessRatio, colorScheme, showSolidBase, showContours, contourIntervalFt, shadingStyle, terraceStepFt, flatShading, terrainSharpness, useSurveyContours, thermocline?.enabled, thermocline?.minFt, thermocline?.maxFt]);
 
   // ---- markers (structure features + waypoints)
   useEffect(() => {
@@ -548,7 +557,7 @@ export const Lake3DViewer: React.FC<Lake3DViewerProps> = ({
     }
     scene.add(group);
     markerGroupRef.current = group;
-  }, [gridData, verticalExaggeration, shadingStyle, terraceStepFt, terrainSharpness, markers, selectedMarkerId]);
+  }, [gridData, verticalExaggeration, depthBoost, shadingStyle, terraceStepFt, terrainSharpness, markers, selectedMarkerId]);
 
   // ---- fly to a cell
   useEffect(() => {
@@ -578,7 +587,8 @@ export const Lake3DViewer: React.FC<Lake3DViewerProps> = ({
     waterMeshRef.current = null;
     if (!showWaterPlane || waterMode === 'carved-bed') return;
 
-    const { gridSize, elevations, minElevation, waterElevation } = gridData;
+    const { gridSize, elevations, waterElevation } = gridData;
+    const minElevation = boostedMinElevation(gridData, depthBoost);
     const length = modelLength(gridData);
     const zScale = verticalScale(gridData, verticalExaggeration);
     const targetWaterElev = waterElevation + (waterLevelOffsetFt || 0) * 0.3048;
@@ -624,7 +634,7 @@ export const Lake3DViewer: React.FC<Lake3DViewerProps> = ({
     const mesh = new THREE.Mesh(geo, mat);
     scene.add(mesh);
     waterMeshRef.current = mesh;
-  }, [gridData, verticalExaggeration, showWaterPlane, waterMode, waterLevelOffsetFt]);
+  }, [gridData, verticalExaggeration, depthBoost, showWaterPlane, waterMode, waterLevelOffsetFt]);
 
   useEffect(() => {
     const mesh = waterMeshRef.current;
@@ -797,7 +807,7 @@ export const Lake3DViewer: React.FC<Lake3DViewerProps> = ({
         <span>Pan: <strong className="text-slate-200">Right drag</strong></span><span>•</span>
         <span>Zoom: <strong className="text-slate-200">Scroll</strong></span><span>•</span>
         <span>Pin: <strong className="text-slate-200">Shift+click</strong></span><span>•</span>
-        <span className="font-mono text-slate-500">{verticalExaggeration.toFixed(1)}× vertical</span>
+        <span className="font-mono text-slate-500">{verticalExaggeration.toFixed(1)}× vertical{depthBoost > 1 ? ` · bed ×${depthBoost.toFixed(1)}` : ''}</span>
         {thermocline?.enabled && (<><span>•</span><span className="text-amber-400 font-mono">band {thermocline.minFt}–{thermocline.maxFt} ft</span></>)}
       </div>
 

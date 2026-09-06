@@ -269,6 +269,8 @@ export interface LakeGenerationOptions {
   forceAiRecon?: boolean;
   userNotes?: string;
   uploadedImage?: { base64: string; mimeType: string };
+  /** Frame padding around the lake as a fraction of its longer side (default 0.28; ~0.06 for a lake-only frame). */
+  framePad?: number;
   /** Skip every live lookup (OSM, DEM, IDNR, Wikipedia, LLM). */
   skipGeodata?: boolean;
 }
@@ -298,13 +300,14 @@ function bboxOfRings(polygons: Ring[][]): LakeMetadata['bounds'] {
 }
 
 /** Pads a shoreline bbox so surrounding terrain shows, and keeps the box from being extremely elongated. */
-function frameBounds(bbox: LakeMetadata['bounds']): LakeMetadata['bounds'] {
+function frameBounds(bbox: LakeMetadata['bounds'], padFraction = 0.28): LakeMetadata['bounds'] {
   const cLat = (bbox.minLat + bbox.maxLat) / 2;
   const cLon = (bbox.minLon + bbox.maxLon) / 2;
   const m = metresPerDegree(cLat);
   let wM = (bbox.maxLon - bbox.minLon) * m.lon;
   let hM = (bbox.maxLat - bbox.minLat) * m.lat;
-  const pad = Math.max(250, Math.max(wM, hM) * 0.28);
+  const frac = Math.max(0.03, Math.min(0.6, padFraction));
+  const pad = Math.max(frac < 0.15 ? 60 : 250, Math.max(wM, hM) * frac);
   wM += pad * 2;
   hM += pad * 2;
   if (wM / hM > 1.75) hM = wM / 1.75;
@@ -581,7 +584,7 @@ export async function generateLakeTerrainGrid(
   const requestedSize = Math.max(32, Math.min(Math.round(gridSize) || 64, MAX_GRID));
   const cacheKey = options?.uploadedImage
     ? null
-    : JSON.stringify([query.trim().toLowerCase(), requestedSize, !!options?.forceAiRecon, options?.userNotes || '', !!options?.skipGeodata]);
+    : JSON.stringify([query.trim().toLowerCase(), requestedSize, !!options?.forceAiRecon, options?.userNotes || '', !!options?.skipGeodata, options?.framePad ?? 0.28]);
   if (cacheKey) {
     const hit = resultCache.get(cacheKey);
     if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.data;
@@ -749,7 +752,7 @@ export async function generateLakeTerrainGrid(
   let real: RealTerrain | null = null;
   if (polygons) {
     const bbox = bboxOfRings(polygons);
-    const bounds = frameBounds(bbox);
+    const bounds = frameBounds(bbox, options?.framePad);
     const areaKm2 = osm?.areaKm2 || idnrOnly?.areaKm2 || 0;
     const perimKm = osm?.perimeterKm || 0;
     if (areaKm2 > 60 || perimKm > 150) size = Math.max(size, MAX_GRID);

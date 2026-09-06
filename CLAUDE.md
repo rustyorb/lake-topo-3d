@@ -26,6 +26,8 @@ Max depth precedence: IDNR survey > curated `server/lakeData.ts` > Wikipedia inf
 
 The IDNR contour layer has no reliable key to the outline layer (`gauge_adjusted_level` is null for most lakes); `fetchIdnrSurvey` queries contours by the outline's bounding box and keeps the ones whose `lake_name` matches the outline's GNIS name.
 
+`framePad` (query/body option, default 0.28 of the lake's longer side) controls how much terrain surrounds the lake; the UI's "Lake only" frame sends 0.06. It is part of the terrain cache key.
+
 Grid conventions everywhere: square `gridSize×gridSize`, row 0 = north edge, col 0 = west edge, `elevations` in metres MSL, `depths` in metres below `waterElevation`. Cells are not necessarily square in metres; `physicalWidthKm/HeightKm` carry the frame size. The server bumps `gridSize` up to `MAX_GRID` (160) for large/branchy lakes regardless of what the client asked for. Results are cached in memory for an hour keyed by query+options; OSM, IDNR and Wikipedia lookups are cached on disk in `.cache/` (`server/diskCache.ts`).
 
 **Shared math (`src/lib/contours.ts`)** — marching squares with edge interpolation plus segment joining, imported by both the server (SVG map) and the browser (3D contour lines). The scalar field used for contours is always "feet relative to the water surface" so the 0 level is the shoreline, positive levels are land, negative levels are depth.
@@ -38,7 +40,7 @@ Grid conventions everywhere: square `gridSize×gridSize`, row 0 = north edge, co
 
 **SVG map (`server/topoMapGenerator.ts`)** — generated server-side and returned as `svgTopoMap` in the terrain JSON. Everything in it is derived from the grid: a hypsometric PNG raster (encoded by `server/png.ts`, no image library) under real contour paths, real bounds in DMS, a scale bar from `physicalWidthKm`. Do not reintroduce hard-coded shapes.
 
-**Scale contract** — vertical exaggeration means the same thing in the viewer and the STL: 1.0x = the same units-per-metre vertically as horizontally. `Lake3DViewer` maps the east-west frame to 100 scene units; `stlExporter` maps it to `targetWidthMm`. `suggestExaggeration` picks a value that gives ~14% of the width as relief because Midwestern lakes are nearly flat at true scale. STL frame: +X east, +Y north, +Z up, flat base at z=0.
+**Scale contract** — vertical exaggeration means the same thing in the viewer and the STL: 1.0x = the same units-per-metre vertically as horizontally. `depthBoost` (`src/lib/relief.ts`) multiplies the bed's drop below the water surface only; `boostedElevation`/`boostedMinElevation` are the single source for both the viewer's mesh heights and the exporter's relief, so keep them in sync through that module. The viewer keeps an unboosted `shaped` grid for contour levels and drapes lines on the boosted one. `Lake3DViewer` maps the east-west frame to 100 scene units; `stlExporter` maps it to `targetWidthMm`. `suggestExaggeration` picks a value that gives ~14% of the width as relief because Midwestern lakes are nearly flat at true scale. STL frame: +X east, +Y north, +Z up, flat base at z=0.
 
 **Frontend (`src/App.tsx`)** owns all state (query, view mode, viewer controls) and passes it down; `Lake3DViewer` splits work into separate effects (terrain+base+contours rebuild, water surface rebuild, wireframe toggle, water opacity) so slider changes only rebuild what they affect. The STL dialog is mounted only while open because it computes the full mesh in `useMemo`.
 

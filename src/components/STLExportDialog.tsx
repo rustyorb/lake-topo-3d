@@ -9,6 +9,7 @@ import {
   downloadBlob,
   suggestExaggeration,
 } from '../utils/stlExporter.js';
+import { suggestDepthBoost } from '../lib/relief.js';
 import {
   Download,
   X,
@@ -31,6 +32,7 @@ interface STLExportDialogProps {
   onClose: () => void;
   gridData: TerrainGridData;
   currentExaggeration: number;
+  currentDepthBoost?: number;
 }
 
 export const STLExportDialog: React.FC<STLExportDialogProps> = ({
@@ -38,10 +40,12 @@ export const STLExportDialog: React.FC<STLExportDialogProps> = ({
   onClose,
   gridData,
   currentExaggeration,
+  currentDepthBoost = 1,
 }) => {
   const [targetWidthMm, setTargetWidthMm] = useState<number>(120);
   const [baseThicknessMm, setBaseThicknessMm] = useState<number>(4);
   const [verticalExaggeration, setVerticalExaggeration] = useState<number>(currentExaggeration || 3);
+  const [depthBoost, setDepthBoost] = useState<number>(currentDepthBoost || 1);
   const [includeWaterCap, setIncludeWaterCap] = useState<boolean>(false);
   const [terraceContours, setTerraceContours] = useState<boolean>(false);
   const [terraceStepFt, setTerraceStepFt] = useState<number>(5);
@@ -56,20 +60,21 @@ export const STLExportDialog: React.FC<STLExportDialogProps> = ({
       baseThicknessMm,
       targetWidthMm,
       verticalExaggeration,
+      depthBoost,
       includeWaterCap,
       format,
       terraceContours,
       terraceStepFt,
     };
     return generateWatertightSTLMesh(gridData, opts);
-  }, [gridData, targetWidthMm, baseThicknessMm, verticalExaggeration, includeWaterCap, terraceContours, terraceStepFt]);
+  }, [gridData, targetWidthMm, baseThicknessMm, verticalExaggeration, depthBoost, includeWaterCap, terraceContours, terraceStepFt]);
 
   // Two mating solids (land, lake bed) for multi-material printers; only built when asked for.
   const splitPreview = useMemo(() => {
     if (materialMode === 'single') return null;
-    const opts: STLOptions = { baseThicknessMm, targetWidthMm, verticalExaggeration, includeWaterCap, format, terraceContours, terraceStepFt };
+    const opts: STLOptions = { baseThicknessMm, targetWidthMm, verticalExaggeration, depthBoost, includeWaterCap, format, terraceContours, terraceStepFt };
     return generateSplitMeshes(gridData, opts);
-  }, [gridData, targetWidthMm, baseThicknessMm, verticalExaggeration, includeWaterCap, terraceContours, terraceStepFt, materialMode]);
+  }, [gridData, targetWidthMm, baseThicknessMm, verticalExaggeration, depthBoost, includeWaterCap, terraceContours, terraceStepFt, materialMode]);
 
   const trueScale = Math.round(1000 / meshPreview.stats.mmPerMetreHorizontal);
 
@@ -219,10 +224,41 @@ export const STLExportDialog: React.FC<STLExportDialogProps> = ({
               <span>1.0x is true scale (horizontal 1:{trueScale.toLocaleString()}). This lake's relief prints at {meshPreview.stats.reliefMm} mm.</span>
               <button
                 type="button"
-                onClick={() => setVerticalExaggeration(suggestExaggeration(gridData, targetWidthMm))}
+                onClick={() => setVerticalExaggeration(suggestExaggeration(gridData, targetWidthMm, 0.14, depthBoost))}
                 className="shrink-0 ml-2 text-amber-400 hover:text-amber-300 underline decoration-dotted cursor-pointer"
               >
                 auto-fit
+              </button>
+            </div>
+          </div>
+
+          {/* Depth boost: exaggerate the lake bed more than the land */}
+          <div className="bg-slate-950/60 p-4 rounded-xl border border-cyan-900/60">
+            <div className="flex justify-between items-center mb-1.5">
+              <label className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
+                <Sliders className="w-3.5 h-3.5 text-cyan-400" />
+                Lake Bed Depth Boost (on top of the relief above):
+              </label>
+              <span className="font-mono text-xs font-bold text-cyan-400">×{depthBoost.toFixed(1)}</span>
+            </div>
+            <input
+              type="range"
+              min={1}
+              max={8}
+              step={0.1}
+              value={depthBoost}
+              onChange={(e) => setDepthBoost(Number(e.target.value))}
+              className="w-full accent-cyan-500 cursor-pointer"
+            />
+            <div className="flex items-center justify-between text-[11px] text-slate-400 mt-1">
+              <span>Bed drops {(gridData.maxDepth * meshPreview.stats.mmPerMetreVertical * depthBoost).toFixed(1)} mm below the waterline; the land is untouched, so the shoreline stays put.</span>
+              <button
+                type="button"
+                onClick={() => setDepthBoost(suggestDepthBoost(gridData))}
+                className="shrink-0 ml-2 text-cyan-400 hover:text-cyan-300 underline decoration-dotted cursor-pointer"
+                title="Make the lake bed as tall as the surrounding land is high"
+              >
+                fishing fit (×{suggestDepthBoost(gridData)})
               </button>
             </div>
           </div>

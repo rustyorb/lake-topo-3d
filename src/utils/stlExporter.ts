@@ -1,4 +1,5 @@
 import { STLOptions, TerrainGridData } from '../types.js';
+import { boostedElevation, boostedMinElevation, boostedSpan } from '../lib/relief.js';
 
 export interface Point3D { x: number; y: number; z: number }
 export interface Triangle { v1: Point3D; v2: Point3D; v3: Point3D }
@@ -42,8 +43,8 @@ export function horizontalMmPerMetre(data: TerrainGridData, targetWidthMm: numbe
  * Suggests a vertical exaggeration that gives the print a pleasing amount of relief
  * (roughly `targetReliefFraction` of the bed width). Midwestern lakes are subtle at 1x.
  */
-export function suggestExaggeration(data: TerrainGridData, targetWidthMm: number, targetReliefFraction = 0.14): number {
-  const span = Math.max(0.5, data.maxElevation - data.minElevation);
+export function suggestExaggeration(data: TerrainGridData, targetWidthMm: number, targetReliefFraction = 0.14, depthBoost = 1): number {
+  const span = boostedSpan(data, depthBoost);
   const trueReliefMm = span * horizontalMmPerMetre(data, targetWidthMm);
   const want = targetWidthMm * targetReliefFraction;
   return Math.round(Math.max(1, Math.min(25, want / trueReliefMm)) * 10) / 10;
@@ -77,8 +78,10 @@ export function generateWatertightSTLMesh(
   options: STLOptions,
   quadMask?: (r: number, c: number) => boolean
 ): { triangles: Triangle[]; stats: MeshStats } {
-  const { gridSize, elevations, minElevation } = data;
+  const { gridSize, elevations } = data;
   const { baseThicknessMm, targetWidthMm, verticalExaggeration, includeWaterCap } = options;
+  const depthBoost = Math.max(1, options.depthBoost || 1);
+  const minElevation = boostedMinElevation(data, depthBoost);
 
   const aspect = (data.physicalHeightKm || 1) / (data.physicalWidthKm || 1);
   const targetLengthMm = targetWidthMm * aspect;
@@ -99,7 +102,7 @@ export function generateWatertightSTLMesh(
     const yMm = (1 - r / (gridSize - 1)) * targetLengthMm; // north (row 0) at +Y
     for (let c = 0; c < gridSize; c++) {
       const xMm = (c / (gridSize - 1)) * targetWidthMm;
-      let elevM = elevations[r][c];
+      let elevM = boostedElevation(elevations[r][c], data.waterElevation, data.waterMask[r][c], depthBoost);
       if (includeWaterCap && data.waterMask[r][c]) elevM = Math.max(elevM, data.waterElevation);
       let reliefM = elevM - minElevation;
       if (options.terraceContours) {

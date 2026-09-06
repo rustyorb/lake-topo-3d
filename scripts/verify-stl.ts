@@ -78,6 +78,24 @@ for (const terrace of [false, true]) {
     if (!(bestY > stats.lengthMm * 0.8)) { console.log('  FAIL: north edge is not at +Y (mirrored)'); failures++; }
   }
 }
+// Depth boost: still closed, deeper relief than unboosted, land height unchanged.
+{
+  const base = { baseThicknessMm: 4, targetWidthMm: 120, verticalExaggeration: 3, includeWaterCap: false, format: 'binary' as const };
+  const plain = generateWatertightSTLMesh(grid, base);
+  const boosted = generateWatertightSTLMesh(grid, { ...base, depthBoost: 3 });
+  const b = check(boosted.triangles);
+  // The bed drops 3× further, the land is unchanged, so total relief grows and so does the solid under the land.
+  const p = check(plain.triangles);
+  const ok = b.badEdges === 0 && b.volume > p.volume && boosted.stats.reliefMm > plain.stats.reliefMm * 1.3;
+  console.log(`depthBoost=3: bad=${b.badEdges} relief ${plain.stats.reliefMm} → ${boosted.stats.reliefMm} mm, height ${plain.stats.heightMm} → ${boosted.stats.heightMm} mm ${ok ? 'OK' : 'FAIL'}`);
+  if (!ok) failures++;
+  const split = generateSplitMeshes(grid, { ...base, depthBoost: 3 });
+  const l = check(split.land.triangles), w = check(split.water.triangles);
+  const sumOk = l.badEdges === 0 && w.badEdges === 0 && Math.abs(l.volume + w.volume - b.volume) < 1e-3 * b.volume;
+  console.log(`depthBoost=3 split: land bad=${l.badEdges} water bad=${w.badEdges} volumes sum ${sumOk ? 'OK' : 'FAIL'}`);
+  if (!sumOk) failures++;
+}
+
 // Material split: both parts closed, and together they hold exactly the single solid's volume.
 {
   const opts = { baseThicknessMm: 4, targetWidthMm: 120, verticalExaggeration: 3, includeWaterCap: false, format: 'binary' as const };

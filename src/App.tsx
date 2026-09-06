@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { 
   Search, 
   Printer, 
@@ -32,6 +32,7 @@ import { GenerativeTopoPanel } from './components/GenerativeTopoPanel.js';
 import { FishingPanel } from './components/FishingPanel.js';
 import { ColorSchemeMode, TerrainGridData, TerrainShadingStyle } from './types.js';
 import { suggestExaggeration } from './utils/stlExporter.js';
+import { suggestDepthBoost } from './lib/relief.js';
 import { describeBathymetry, describeDem, describeGeometry, describeMethod } from './lib/labels.js';
 import { analyzeStructure, gridToLatLon, STRUCTURE_STYLE, StructureFeature, StructureKind } from './lib/structure.js';
 import { Waypoint, loadWaypoints, saveWaypoints, newWaypointId, nextWaypointName } from './lib/waypoints.js';
@@ -67,6 +68,10 @@ export default function App() {
 
   // 3D Visual Controls
   const [verticalExaggeration, setVerticalExaggeration] = useState<number>(3.0);
+  const [depthBoost, setDepthBoost] = useState<number>(1);
+  const [frameMode, setFrameMode] = useState<'terrain' | 'lake'>('terrain');
+  const frameModeRef = useRef<'terrain' | 'lake'>('terrain');
+  frameModeRef.current = frameMode;
   const [baseThicknessRatio, setBaseThicknessRatio] = useState<number>(1.0);
   const [colorScheme, setColorScheme] = useState<ColorSchemeMode>('hypsometric');
   const [waterMode, setWaterMode] = useState<WaterDisplayMode>('carved-bed');
@@ -161,11 +166,14 @@ export default function App() {
   ], [visibleStructure, waypoints]);
 
   // Fetch lake data with optional AI recon and user notes
-  const fetchLakeData = useCallback(async (query: string, options?: { forceAiRecon?: boolean; userNotes?: string }) => {
+  const fetchLakeData = useCallback(async (query: string, options?: { forceAiRecon?: boolean; userNotes?: string; frame?: 'terrain' | 'lake' }) => {
     setIsLoading(true);
     setError(null);
     try {
       let url = `/api/lake-terrain?q=${encodeURIComponent(query)}&gridSize=${GRID_SIZE}`;
+      if ((options?.frame ?? frameModeRef.current) === 'lake') {
+        url += `&framePad=0.06`;
+      }
       if (options?.forceAiRecon) {
         url += `&forceAiRecon=true`;
       }
@@ -180,6 +188,7 @@ export default function App() {
       const data: TerrainGridData = await res.json();
       setGridData(data);
       setCurrentQuery(query);
+      setDepthBoost(1);
       setVerticalExaggeration(suggestExaggeration(data, 120));
     } catch (err: any) {
       console.error('Error fetching lake:', err);
@@ -436,6 +445,7 @@ export default function App() {
                         terraceStepFt={terraceStepFt}
                         flatShading={flatShading}
                         terrainSharpness={terrainSharpness}
+                        depthBoost={depthBoost}
                         onUpdateShadingStyle={setShadingStyle}
                         onUpdateTerraceStep={setTerraceStepFt}
                         onUpdateFlatShading={setFlatShading}
@@ -483,6 +493,7 @@ export default function App() {
                           terraceStepFt={terraceStepFt}
                           flatShading={flatShading}
                           terrainSharpness={terrainSharpness}
+                          depthBoost={depthBoost}
                           onUpdateShadingStyle={setShadingStyle}
                           onUpdateTerraceStep={setTerraceStepFt}
                           onUpdateFlatShading={setFlatShading}
@@ -613,14 +624,66 @@ export default function App() {
                   {gridData && (
                     <button
                       type="button"
-                      onClick={() => setVerticalExaggeration(suggestExaggeration(gridData, 120))}
+                      onClick={() => setVerticalExaggeration(suggestExaggeration(gridData, 120, 0.14, depthBoost))}
                       className="text-sky-400 hover:text-sky-300 underline decoration-dotted cursor-pointer"
                       title="Pick an exaggeration that gives this lake a printable amount of relief"
                     >
-                      auto-fit ({suggestExaggeration(gridData, 120)}x)
+                      auto-fit ({suggestExaggeration(gridData, 120, 0.14, depthBoost)}x)
                     </button>
                   )}
                   <span>25x</span>
+                </div>
+              </div>
+
+              {/* Depth boost: the lake bed gets more exaggeration than the land */}
+              <div className="p-3 bg-slate-950/60 rounded-xl border border-cyan-900/60 space-y-1.5">
+                <div className="flex justify-between text-xs">
+                  <span className="text-cyan-300 font-semibold">Lake bed depth boost:</span>
+                  <span className="font-mono font-bold text-cyan-400">×{depthBoost.toFixed(1)}</span>
+                </div>
+                <input
+                  type="range"
+                  min={1}
+                  max={8}
+                  step={0.1}
+                  value={depthBoost}
+                  onChange={(e) => setDepthBoost(Number(e.target.value))}
+                  className="w-full accent-cyan-500 cursor-pointer"
+                />
+                <div className="flex justify-between items-center text-[10px] text-slate-500">
+                  <span>×1 = same scale as land</span>
+                  {gridData && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const b = suggestDepthBoost(gridData);
+                        setDepthBoost(b);
+                        setVerticalExaggeration(suggestExaggeration(gridData, 120, 0.14, b));
+                      }}
+                      className="text-cyan-400 hover:text-cyan-300 underline decoration-dotted cursor-pointer"
+                      title="Make the bed as tall as the land is high, then re-fit the overall relief. Drop-offs and holes read the way they do from the boat."
+                    >
+                      fishing fit (×{suggestDepthBoost(gridData)})
+                    </button>
+                  )}
+                  <span>×8</span>
+                </div>
+                <p className="text-[10px] text-slate-500 leading-relaxed">
+                  Only the bed moves. The shoreline and every land contour stay where they are, and the STL uses the same numbers.
+                </p>
+                <div className="flex items-center gap-1.5 pt-1 border-t border-slate-800/80">
+                  <span className="text-[10px] text-slate-400">Frame:</span>
+                  {(['terrain', 'lake'] as const).map((m) => (
+                    <button
+                      key={m}
+                      type="button"
+                      onClick={() => { if (m !== frameMode) { setFrameMode(m); fetchLakeData(currentQuery, { frame: m }); } }}
+                      className={`px-2 py-0.5 rounded text-[10px] font-medium cursor-pointer ${frameMode === m ? 'bg-cyan-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}
+                      title={m === 'lake' ? 'Tight frame: the print is nearly all lake' : 'Wide frame with the surrounding terrain'}
+                    >
+                      {m === 'lake' ? 'Lake only' : 'Terrain context'}
+                    </button>
+                  ))}
                 </div>
               </div>
 
@@ -1059,6 +1122,7 @@ export default function App() {
           onClose={() => setIsExportDialogOpen(false)}
           gridData={gridData}
           currentExaggeration={verticalExaggeration}
+          currentDepthBoost={depthBoost}
         />
       )}
     </div>

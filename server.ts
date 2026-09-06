@@ -71,6 +71,7 @@ async function startServer() {
         forceAiRecon: req.query.forceAiRecon === 'true',
         userNotes: req.query.userNotes ? String(req.query.userNotes) : undefined,
         skipGeodata: req.query.offline === 'true',
+        framePad: req.query.framePad !== undefined ? Number(req.query.framePad) : undefined,
       });
       res.json(data);
     } catch (err: any) {
@@ -81,12 +82,13 @@ async function startServer() {
 
   app.post('/api/lake-terrain', async (req, res) => {
     try {
-      const { query, gridSize, forceAiRecon, userNotes, uploadedImage, offline } = req.body || {};
+      const { query, gridSize, forceAiRecon, userNotes, uploadedImage, offline, framePad } = req.body || {};
       const data = await generateLakeTerrainGrid(query || DEFAULT_QUERY, parseGrid(gridSize), {
         forceAiRecon: Boolean(forceAiRecon),
         userNotes,
         uploadedImage,
         skipGeodata: Boolean(offline),
+        framePad: framePad !== undefined ? Number(framePad) : undefined,
       });
       res.json(data);
     } catch (err: any) {

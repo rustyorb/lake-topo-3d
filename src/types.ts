@@ -122,6 +122,7 @@ export interface STLOptions {
   baseThicknessMm: number; // thickness of flat base pedestal in mm (below the lowest point of the terrain)
   targetWidthMm: number;   // size of the model on the 3D print bed (X dimension)
   verticalExaggeration: number; // multiple of TRUE scale (1.0 = same mm/m vertically as horizontally)
+  depthBoost?: number;      // extra multiplier on the lake bed only (1 = none); anchored at the water surface
   includeWaterCap: boolean; // if true, fills the lake to the water surface instead of hollowing the bathymetry
   format: 'binary' | 'ascii';
   terraceContours?: boolean; // if true, exports stepped contour layers (laser-cut topo look)

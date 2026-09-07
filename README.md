@@ -1,8 +1,49 @@
-# Lake Topo 3D
+<p align="center">
+  <img src="docs/banner.svg" alt="Lake Topo 3D" width="100%">
+</p>
 
-Type the name of a lake. Get its **real shoreline**, **real terrain**, the best **bathymetry on record** (or **your own soundings**), an interactive 3D view with **real sun shadows**, a vector topographic/bathymetric map, a **fishing layer** (structure, thermocline band, waypoints, contour routes, cross-sections, windblown banks, GPX), a **watertight STL / 3MF** for the printer and a **laser-cut layer pack**.
+<p align="center">
+  <img alt="No API keys" src="https://img.shields.io/badge/API%20keys-none%20required-22c55e?style=flat-square">
+  <img alt="Bathymetry" src="https://img.shields.io/badge/bathymetry-Indiana%20DNR%20sonar-1d4ed8?style=flat-square">
+  <img alt="Elevation" src="https://img.shields.io/badge/elevation-USGS%203DEP%20LiDAR-0ea5e9?style=flat-square">
+  <img alt="Shoreline" src="https://img.shields.io/badge/shoreline-OpenStreetMap-7ebc6f?style=flat-square">
+  <img alt="Export" src="https://img.shields.io/badge/export-STL%20%C2%B7%203MF%20%C2%B7%20GPX%20%C2%B7%20SVG-f59e0b?style=flat-square">
+  <img alt="Stack" src="https://img.shields.io/badge/stack-TypeScript%20%C2%B7%20React%2019%20%C2%B7%20Three.js-8b5cf6?style=flat-square">
+</p>
 
-No API keys needed for any of the map data. An LLM is optional and only fills gaps.
+<p align="center">
+  Type the name of a lake. Get its <b>real shoreline</b>, <b>real terrain</b>, the best <b>bathymetry on record</b> (or <b>your own soundings</b>), an interactive 3D model with <b>real sun shadows</b>, a vector survey map, a <b>fishing layer</b> (structure, thermocline band, waypoints, contour routes, cross-sections, windblown banks, GPX), a <b>watertight STL / 3MF</b> for the printer and a <b>laser-cut layer pack</b>.<br>
+  <sub>No API keys for any of the map data. An LLM is optional and only fills gaps. Every number says where it came from.</sub>
+</p>
+
+---
+
+## What it does
+
+| | |
+| --- | --- |
+| 🗺️ **Real geometry** | OpenStreetMap shoreline, USGS 3DEP LiDAR ground (1 m across Indiana), Terrarium tiles anywhere else. |
+| 📡 **Surveyed depths** | Indiana DNR sonar contours for 150+ lakes, drawn as the survey's own lines and interpolated into the grid. Elsewhere, a modelled bowl scaled to the max depth on record, labelled as such. |
+| 🎣 **Structure finder** | Holes, humps, drop-offs, points, flats and saddles detected from the depth grid, ranked, mapped, and one click from becoming a waypoint. |
+| 🌡️ **Thermocline band** | Shade every bit of bottom between two depths and see which structure sits in it. Seasonal presets, sliders for the real number off your probe. |
+| 📍 **Waypoints + GPX** | Shift-click the model or the map. Exports GPX 1.1 that Humminbird, Lowrance, Garmin and Navionics import, with depth in the description. |
+| 🧊 **3D that tells the truth** | True-scale vertical exaggeration, a separate **depth boost** for the bed, "fishing fit", draped DNR contour lines, lat/lon under the cursor. |
+| 🖨️ **Printable** | Closed-manifold STL, north up, verified. **Land + lake as two mating solids** or one two-part 3MF for AMS / multi-material printers. |
+| 📄 **Paper-style survey map** | SVG with hypsometric raster, contour labels the way the DNR sheets do them, spot heights, scale bar, DMS corners. |
+| ⚓ **Your own soundings** | Upload CSV/TSV/GPX depth soundings from a sonar unit and the bed is rebuilt from them, shoreline held at zero, labelled honestly. |
+| 🧭 **Routes and sections** | Every loop of a chosen depth contour as a GPX track to steer along; click two points for a bottom-profile chart with structure and the thermocline band. |
+| ☀️ **Sun and wind** | Light the model from the real solar position for a date and time, shadows corrected for exaggeration so shade lines are true length; windblown banks highlighted. |
+| 🪚 **Laser-cut layer pack** | Every contour level as closed cut lines in SVG or DXF, tiled with registration holes, with the stack height and exaggeration for your material. |
+
+## Screenshots
+
+| 3D model, fishing chart palette, structure markers | Survey map with native DNR contours |
+| --- | --- |
+| ![3D fishing view of Lake Wawasee](docs/shot-3d-fishing.png) | ![2D survey map of Lake Wawasee](docs/shot-2d-survey.png) |
+
+| Fishing layer: thermocline band | Export: depth boost and multi-material |
+| --- | --- |
+| ![Fishing panel](docs/shot-fishing-panel.png) | ![Export dialog](docs/shot-export.png) |
 
 ## Quick start
 

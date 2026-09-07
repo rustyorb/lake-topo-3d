@@ -36,6 +36,13 @@ import { suggestDepthBoost } from './lib/relief.js';
 import { describeBathymetry, describeDem, describeGeometry, describeMethod } from './lib/labels.js';
 import { analyzeStructure, gridToLatLon, STRUCTURE_STYLE, StructureFeature, StructureKind } from './lib/structure.js';
 import { Waypoint, loadWaypoints, saveWaypoints, newWaypointId, nextWaypointName } from './lib/waypoints.js';
+import type { OverlayLine, PickMode } from './lib/overlays.js';
+import { contourRoutes } from './lib/routes.js';
+import { SectionChart } from './components/SectionChart.js';
+import { ConditionsPanel, SunSettings, WindSettings } from './components/ConditionsPanel.js';
+import { sunPosition, localDateTime, localIsoDate } from './lib/sun.js';
+import { windblownShore } from './lib/wind.js';
+import type { Sounding } from './lib/soundings.js';
 
 const FT_PER_M = 3.28084;
 const WAYPOINT_COLOR = 0xfacc15;
@@ -113,16 +120,38 @@ export default function App() {
   const [thermocline, setThermocline] = useState<ThermoclineBand>({ enabled: false, minFt: 18, maxFt: 28 });
   const [waypoints, setWaypoints] = useState<Waypoint[]>([]);
   const [selectedMarkerId, setSelectedMarkerId] = useState<string | null>(null);
-  const [pinMode, setPinMode] = useState<boolean>(false);
+  const [pickMode, setPickMode] = useState<PickMode>('none');
+  const [section, setSection] = useState<{ a: { row: number; col: number }; b: { row: number; col: number } | null } | null>(null);
   const [focusRequest, setFocusRequest] = useState<{ row: number; col: number; nonce: number } | null>(null);
   const [useSurveyContours, setUseSurveyContours] = useState<boolean>(true);
+  const [routeDepthFt, setRouteDepthFt] = useState<number>(10);
+  const [selectedRouteIds, setSelectedRouteIds] = useState<string[]>([]);
+  // The user's own depth soundings; the ref lets re-fetches (frame toggle, AI recon) keep them
+  const [soundings, setSoundings] = useState<Sounding[] | null>(null);
+  const soundingsRef = useRef<Sounding[] | null>(null);
 
   const structure = useMemo<StructureFeature[]>(() => (gridData ? analyzeStructure(gridData) : []), [gridData]);
+  const routes = useMemo(() => (gridData ? contourRoutes(gridData, routeDepthFt, useSurveyContours) : []), [gridData, routeDepthFt, useSurveyContours]);
+  useEffect(() => setSelectedRouteIds([]), [gridData, routeDepthFt]);
+
+  // Sun and wind conditions
+  const [sunCfg, setSunCfg] = useState<SunSettings>(() => {
+    const d = new Date();
+    return { enabled: false, date: localIsoDate(d), minutes: d.getHours() * 60 + d.getMinutes() };
+  });
+  const [wind, setWind] = useState<WindSettings>({ enabled: false, fromDeg: 225 });
+  const sunPos = useMemo(
+    () => (gridData && sunCfg.enabled ? sunPosition(localDateTime(sunCfg.date, sunCfg.minutes), gridData.metadata.lat, gridData.metadata.lon) : null),
+    [gridData, sunCfg]
+  );
+  const windShore = useMemo(() => (gridData && wind.enabled ? windblownShore(gridData, wind.fromDeg) : []), [gridData, wind]);
+  const sunLight = useMemo(() => (sunPos ? { enabled: true, ...sunPos } : { enabled: false, azimuthDeg: 0, elevationDeg: 0 }), [sunPos]);
   const lakeId = gridData?.metadata.id;
   useEffect(() => {
     setWaypoints(lakeId ? loadWaypoints(lakeId) : []);
     setSelectedMarkerId(null);
     setFocusRequest(null);
+    setSection(null);
   }, [lakeId]);
 
   const updateWaypoints = useCallback((next: Waypoint[]) => {
@@ -155,6 +184,29 @@ export default function App() {
 
   const focusOn = useCallback((row: number, col: number) => setFocusRequest({ row, col, nonce: Date.now() }), []);
 
+  // A click in a pick mode: drop a pin, or set one end of the cross-section (A, then B, then leave the mode).
+  const handlePick = useCallback((cell: { row: number; col: number }, mode: 'pin' | 'section') => {
+    if (mode === 'pin') { addWaypoint(cell.row, cell.col); return; }
+    setSection((s) => (!s || s.b ? { a: cell, b: null } : { a: s.a, b: cell }));
+  }, [addWaypoint]);
+  useEffect(() => {
+    if (section?.b && pickMode === 'section') setPickMode('none');
+  }, [section, pickMode]);
+
+  const overlays = useMemo<OverlayLine[]>(() => {
+    const out: OverlayLine[] = [];
+    if (section) {
+      const b = section.b ?? section.a;
+      const pts: Array<[number, number]> = [];
+      const n = 64;
+      for (let i = 0; i <= n; i++) pts.push([section.a.col + ((b.col - section.a.col) * i) / n, section.a.row + ((b.row - section.a.row) * i) / n]);
+      out.push({ id: 'section', points: pts, color: '#f8fafc', dashed: true, endpoints: true });
+    }
+    for (const r of routes) if (selectedRouteIds.includes(r.id)) out.push({ id: r.id, points: r.points, color: '#f59e0b' });
+    windShore.forEach((pts, i) => out.push({ id: `wind-${i}`, points: pts, color: '#f97316' }));
+    return out;
+  }, [section, routes, selectedRouteIds, windShore]);
+
   const visibleStructure = useMemo(() => (showStructure ? structure.filter((f) => !hiddenKinds.includes(f.kind)) : []), [structure, hiddenKinds, showStructure]);
   const markers3d = useMemo<ViewerMarker[]>(() => [
     ...visibleStructure.map((f) => ({ id: f.id, row: f.row, col: f.col, color: STRUCTURE_STYLE[f.kind].hex, label: `${f.label} · ${f.depthFt} ft`, detail: f.detail, shape: 'sphere' as const })),
@@ -166,21 +218,27 @@ export default function App() {
   ], [visibleStructure, waypoints]);
 
   // Fetch lake data with optional AI recon and user notes
-  const fetchLakeData = useCallback(async (query: string, options?: { forceAiRecon?: boolean; userNotes?: string; frame?: 'terrain' | 'lake' }) => {
+  const fetchLakeData = useCallback(async (query: string, options?: { forceAiRecon?: boolean; userNotes?: string; frame?: 'terrain' | 'lake'; soundings?: Sounding[] | null }) => {
     setIsLoading(true);
     setError(null);
     try {
-      let url = `/api/lake-terrain?q=${encodeURIComponent(query)}&gridSize=${GRID_SIZE}`;
-      if ((options?.frame ?? frameModeRef.current) === 'lake') {
-        url += `&framePad=0.06`;
+      const framePad = (options?.frame ?? frameModeRef.current) === 'lake' ? 0.06 : undefined;
+      const own = options?.soundings === undefined ? soundingsRef.current : options.soundings;
+      let res: Response;
+      if (own && own.length) {
+        // Soundings travel in the body; the server rebuilds the bed from them
+        res = await fetch('/api/lake-terrain', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query, gridSize: GRID_SIZE, framePad, forceAiRecon: options?.forceAiRecon, userNotes: options?.userNotes, soundings: own }),
+        });
+      } else {
+        let url = `/api/lake-terrain?q=${encodeURIComponent(query)}&gridSize=${GRID_SIZE}`;
+        if (framePad !== undefined) url += `&framePad=${framePad}`;
+        if (options?.forceAiRecon) url += `&forceAiRecon=true`;
+        if (options?.userNotes) url += `&userNotes=${encodeURIComponent(options.userNotes)}`;
+        res = await fetch(url);
       }
-      if (options?.forceAiRecon) {
-        url += `&forceAiRecon=true`;
-      }
-      if (options?.userNotes) {
-        url += `&userNotes=${encodeURIComponent(options.userNotes)}`;
-      }
-      const res = await fetch(url);
       if (!res.ok) {
         const body = await res.json().catch(() => null);
         throw new Error(body?.error || `Failed to load lake terrain (${res.status})`);
@@ -198,8 +256,20 @@ export default function App() {
     }
   }, []);
 
+  const applySoundings = useCallback((points: Sounding[]) => {
+    soundingsRef.current = points;
+    setSoundings(points);
+    fetchLakeData(currentQuery, { soundings: points });
+  }, [currentQuery, fetchLakeData]);
+  const resetSoundings = () => { soundingsRef.current = null; setSoundings(null); };
+  const clearSoundings = useCallback(() => {
+    resetSoundings();
+    fetchLakeData(currentQuery, { soundings: null });
+  }, [currentQuery, fetchLakeData]);
+
   // Handle upload of topo map image via Gemini Vision
   const handleUploadTopoImage = async (imageBase64: string, mimeType: string, lakeName?: string) => {
+    resetSoundings();
     setIsLoading(true);
     setError(null);
     try {
@@ -237,12 +307,14 @@ export default function App() {
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (searchQuery.trim()) {
+      if (searchQuery.trim() !== currentQuery) resetSoundings(); // soundings belong to one lake
       fetchLakeData(searchQuery.trim());
     }
   };
 
   const selectLakePreset = (lakeQuery: string) => {
     setSearchQuery(lakeQuery);
+    if (lakeQuery !== currentQuery) resetSoundings();
     fetchLakeData(lakeQuery);
   };
 
@@ -456,11 +528,11 @@ export default function App() {
                         thermocline={thermocline}
                         markers={markers3d}
                         selectedMarkerId={selectedMarkerId}
-                        pinMode={pinMode}
-                        focusRequest={focusRequest}
-                        onDropPin={(cell) => addWaypoint(cell.row, cell.col)}
+                        pickMode={pickMode} overlays={overlays}
+                        focusRequest={focusRequest} sun={sunLight} wind={wind}
+                        onPick={handlePick}
                         onSelectMarker={setSelectedMarkerId}
-                        onTogglePinMode={setPinMode}
+                        onSetPickMode={setPickMode}
                       />
                     </div>
                   )}
@@ -468,7 +540,7 @@ export default function App() {
                   {/* Mode 2: 2D Topo Map Only */}
                   {viewMode === 'topo' && (
                     <div className="w-full h-full flex-1 min-h-[520px]">
-                      <TopoMapViewer gridData={gridData} markers={markers2d} selectedMarkerId={selectedMarkerId} pinMode={pinMode} onDropPin={(cell) => addWaypoint(cell.row, cell.col)} onSelectMarker={setSelectedMarkerId} />
+                      <TopoMapViewer gridData={gridData} markers={markers2d} selectedMarkerId={selectedMarkerId} pickMode={pickMode} overlays={overlays} onPick={handlePick} onSelectMarker={setSelectedMarkerId} />
                     </div>
                   )}
 
@@ -504,21 +576,34 @@ export default function App() {
                           thermocline={thermocline}
                           markers={markers3d}
                           selectedMarkerId={selectedMarkerId}
-                          pinMode={pinMode}
-                          focusRequest={focusRequest}
-                          onDropPin={(cell) => addWaypoint(cell.row, cell.col)}
+                          pickMode={pickMode} overlays={overlays}
+                          focusRequest={focusRequest} sun={sunLight} wind={wind}
+                          onPick={handlePick}
                           onSelectMarker={setSelectedMarkerId}
-                          onTogglePinMode={setPinMode}
+                          onSetPickMode={setPickMode}
                         />
                       </div>
                       <div className="h-[520px] rounded-xl overflow-hidden border border-slate-800">
-                        <TopoMapViewer gridData={gridData} markers={markers2d} selectedMarkerId={selectedMarkerId} pinMode={pinMode} onDropPin={(cell) => addWaypoint(cell.row, cell.col)} onSelectMarker={setSelectedMarkerId} />
+                        <TopoMapViewer gridData={gridData} markers={markers2d} selectedMarkerId={selectedMarkerId} pickMode={pickMode} overlays={overlays} onPick={handlePick} onSelectMarker={setSelectedMarkerId} />
                       </div>
                     </div>
                   )}
                 </div>
               ) : null}
             </div>
+
+            {/* Cross-section between the two picked points */}
+            {gridData && section?.b && (
+              <SectionChart
+                data={gridData}
+                a={section.a}
+                b={section.b}
+                structure={visibleStructure}
+                thermocline={thermocline}
+                onSwap={() => setSection({ a: section.b!, b: section.a })}
+                onClear={() => setSection(null)}
+              />
+            )}
 
             {/* Quick Stats Bar Under Map */}
             {gridData && (
@@ -583,11 +668,25 @@ export default function App() {
                 selectedId={selectedMarkerId}
                 onSelect={setSelectedMarkerId}
                 onFocus={focusOn}
-                pinMode={pinMode}
-                onTogglePinMode={setPinMode}
+                pickMode={pickMode}
+                onSetPickMode={setPickMode}
                 useSurveyContours={useSurveyContours}
                 onToggleSurveyContours={setUseSurveyContours}
+                routeDepthFt={routeDepthFt}
+                onRouteDepthChange={setRouteDepthFt}
+                routes={routes}
+                selectedRouteIds={selectedRouteIds}
+                onToggleRoute={(id) => setSelectedRouteIds((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]))}
+                soundings={soundings}
+                onApplySoundings={applySoundings}
+                onClearSoundings={clearSoundings}
+                isLoading={isLoading}
               />
+            )}
+
+            {/* Sun position lighting and windblown shore */}
+            {gridData && (
+              <ConditionsPanel sun={sunCfg} onSunChange={setSunCfg} sunPos={sunPos} wind={wind} onWindChange={setWind} windblownRuns={windShore.length} />
             )}
 
             {/* 3D Manipulation Controls Panel */}

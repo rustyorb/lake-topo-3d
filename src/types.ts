@@ -29,6 +29,7 @@ export type BathymetrySource =
   | 'idnr-sonar'      // Indiana DNR sonar-surveyed depth contours, interpolated
   | 'distance-model'  // distance-to-shore bowl scaled to max depth
   | 'curated-sdf'     // hand-built Deam Lake model
+  | 'user-soundings'  // the user's own depth soundings, interpolated inside the shoreline
   | 'procedural';
 
 export type DemSource = '3dep' | 'terrarium' | 'synthetic';
@@ -78,6 +79,8 @@ export interface LakeMetadata {
   llmProvider?: string;
   /** True when maxDepth / meanDepth are estimates rather than surveyed values. */
   depthIsEstimated?: boolean;
+  /** Number of user soundings that fell inside the lake when bathymetrySource is 'user-soundings'. */
+  soundingCount?: number;
   topoAnalysisNotes?: string;
   osmId?: string;
 }

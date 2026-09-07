@@ -27,6 +27,7 @@ export function describeBathymetry(b?: BathymetrySource): string {
     case 'idnr-sonar': return 'IDNR sonar contours';
     case 'distance-model': return 'Modelled (distance to shore)';
     case 'curated-sdf': return 'Hand-built survey model';
+    case 'user-soundings': return 'Your soundings (interpolated)';
     case 'procedural': return 'Procedural';
     default: return 'Unknown';
   }

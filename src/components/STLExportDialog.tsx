@@ -10,6 +10,7 @@ import {
   suggestExaggeration,
 } from '../utils/stlExporter.js';
 import { suggestDepthBoost } from '../lib/relief.js';
+import { buildLayerPack, layerPackSvg, layerPackDxf } from '../lib/layers.js';
 import {
   Download,
   X,
@@ -20,6 +21,7 @@ import {
   Box,
   FileCode2,
   Palette,
+  Scissors,
 } from 'lucide-react';
 
 export type MaterialMode = 'single' | 'split-stl' | '3mf';
@@ -53,6 +55,9 @@ export const STLExportDialog: React.FC<STLExportDialogProps> = ({
   const [materialMode, setMaterialMode] = useState<MaterialMode>('single');
   const [isExporting, setIsExporting] = useState<boolean>(false);
   const [downloadSuccess, setDownloadSuccess] = useState<boolean>(false);
+  const [laserStepFt, setLaserStepFt] = useState<number>(5);
+  const [laserIncludeLand, setLaserIncludeLand] = useState<boolean>(true);
+  const [laserThicknessMm, setLaserThicknessMm] = useState<number>(3);
 
   // Compute live mesh statistics
   const meshPreview = useMemo(() => {
@@ -76,9 +81,21 @@ export const STLExportDialog: React.FC<STLExportDialogProps> = ({
     return generateSplitMeshes(gridData, opts);
   }, [gridData, targetWidthMm, baseThicknessMm, verticalExaggeration, depthBoost, includeWaterCap, terraceContours, terraceStepFt, materialMode]);
 
+  // Laser-cut layer pack: contour rings per level, tiled on one page at the print width.
+  const layerPack = useMemo(
+    () => buildLayerPack(gridData, { stepFt: laserStepFt, widthMm: targetWidthMm, includeLand: laserIncludeLand }),
+    [gridData, laserStepFt, targetWidthMm, laserIncludeLand]
+  );
+
   const trueScale = Math.round(1000 / meshPreview.stats.mmPerMetreHorizontal);
 
   if (!isOpen) return null;
+
+  const downloadLayers = (kind: 'svg' | 'dxf') => {
+    const text = kind === 'svg' ? layerPackSvg(layerPack, gridData.metadata.name) : layerPackDxf(layerPack, gridData.metadata.name);
+    const slug = `${gridData.metadata.name} ${gridData.metadata.state}`.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    downloadBlob(new Blob([text], { type: kind === 'svg' ? 'image/svg+xml;charset=utf-8' : 'application/dxf' }), `${slug}-laser-${laserStepFt}ft-${targetWidthMm}mm.${kind}`);
+  };
 
   const handleExport = () => {
     setIsExporting(true);
@@ -380,6 +397,58 @@ export const STLExportDialog: React.FC<STLExportDialogProps> = ({
                 The 3MF loads as one object with two parts already; the colours are hints and some slicers ignore them.
               </p>
             )}
+          </div>
+
+          {/* Laser-cut layer pack */}
+          <div className="p-3 bg-slate-950/50 rounded-xl border border-orange-900/60 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-orange-200 flex items-center gap-1.5">
+                <Scissors className="w-3.5 h-3.5 text-orange-400" /> Laser-cut layer pack
+              </span>
+              <span className="text-[10px] text-slate-500">SVG · DXF · {layerPack.layers.length} sheets</span>
+            </div>
+            <p className="text-[10px] text-slate-400 leading-relaxed">
+              Every contour level as closed cut lines, tiled on one page at the print-bed width above. Water sheets are full rectangles with the deeper lake cut out; land sheets are the hills themselves. Registration holes in the margins line the stack up on dowels. Black cuts, blue engraves.
+            </p>
+            <div className="flex flex-wrap items-center gap-2 text-[11px]">
+              <span className="text-slate-400">Step:</span>
+              {[2, 5, 10].map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  onClick={() => setLaserStepFt(s)}
+                  className={`px-2 py-0.5 rounded-lg font-mono cursor-pointer ${laserStepFt === s ? 'bg-orange-500 text-slate-950 font-bold' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}
+                >
+                  {s} ft
+                </button>
+              ))}
+              <label className="flex items-center gap-1 text-slate-300 cursor-pointer ml-1">
+                <input type="checkbox" checked={laserIncludeLand} onChange={(e) => setLaserIncludeLand(e.target.checked)} className="w-3.5 h-3.5 accent-orange-500 cursor-pointer" />
+                land sheets
+              </label>
+              <span className="ml-auto text-slate-400">Material:</span>
+              <input
+                type="number"
+                min={0.5}
+                max={25}
+                step={0.5}
+                value={laserThicknessMm}
+                onChange={(e) => setLaserThicknessMm(Math.max(0.5, Number(e.target.value) || 0.5))}
+                className="w-14 bg-slate-950 border border-slate-700 rounded px-1.5 py-0.5 font-mono text-orange-300 focus:outline-none focus:border-orange-500"
+              />
+              <span className="text-slate-400">mm</span>
+            </div>
+            <div className="text-[11px] text-slate-300 font-mono">
+              {layerPack.layers.length} sheets × {laserThicknessMm} mm = {(layerPack.layers.length * laserThicknessMm).toFixed(0)} mm tall · true scale is {layerPack.trueThicknessMm.toFixed(2)} mm per sheet, so this stack is {(laserThicknessMm / Math.max(1e-6, layerPack.trueThicknessMm)).toFixed(1)}× exaggerated
+            </div>
+            <div className="flex gap-2">
+              <button type="button" onClick={() => downloadLayers('svg')} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-orange-600 hover:bg-orange-500 text-white cursor-pointer">
+                <Download className="w-3.5 h-3.5" /> SVG page
+              </button>
+              <button type="button" onClick={() => downloadLayers('dxf')} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 cursor-pointer">
+                <Download className="w-3.5 h-3.5" /> DXF (R12, mm)
+              </button>
+            </div>
           </div>
 
           {/* STL Format Selector */}

@@ -15,6 +15,7 @@ import {
 import { sampleDem3dep } from './dem3dep.js';
 import { IdnrOutline, IdnrSurvey, fetchIdnrSurvey, findIdnrOutline, findIdnrOutlineByName, findIdnrPdf, rasterizeContourDepths } from './idnrBathymetry.js';
 import { lookupWikiFacts, WikiFacts } from './wikiData.js';
+import { Sounding, hashSoundings, rasterizeSoundings } from './soundings.js';
 
 const FT_PER_M = 3.28084;
 const ACRES_PER_KM2 = 247.105;
@@ -273,6 +274,8 @@ export interface LakeGenerationOptions {
   framePad?: number;
   /** Skip every live lookup (OSM, DEM, IDNR, Wikipedia, LLM). */
   skipGeodata?: boolean;
+  /** The user's own depth soundings; when 3+ fall inside the shoreline they replace every other bathymetry source. */
+  soundings?: Sounding[];
 }
 
 interface Grid {
@@ -334,9 +337,10 @@ const IDNR_ATTRIBUTION = 'Indiana Department of Natural Resources, Division of F
 interface RealTerrain extends Grid {
   surfaceElevationM: number;
   demSource: '3dep' | 'terrarium';
-  bathymetrySource: 'idnr-sonar' | 'distance-model';
+  bathymetrySource: 'idnr-sonar' | 'distance-model' | 'user-soundings';
   maxDepthM: number;
   survey: IdnrSurvey | null;
+  soundingsUsed: number;
 }
 
 /**
@@ -350,6 +354,7 @@ async function buildRealTerrain(
   bounds: LakeMetadata['bounds'],
   maxDepthM: number,
   survey: IdnrSurvey | null,
+  soundings: Sounding[] | null,
   demPreference: 'auto' | '3dep' | 'terrarium'
 ): Promise<RealTerrain | null> {
   let demElev: number[][] | null = null;
@@ -386,7 +391,14 @@ async function buildRealTerrain(
   const depths: number[][] = [];
   let bathymetrySource: RealTerrain['bathymetrySource'] = 'distance-model';
   let observedMaxM = 0;
-  if (survey) {
+  let soundingsUsed = 0;
+  const own = soundings && soundings.length >= 3 ? rasterizeSoundings(soundings, waterMask, bounds) : null;
+  if (own && own.used >= 3) {
+    for (let r = 0; r < size; r++) depths[r] = own.depthsM[r];
+    bathymetrySource = 'user-soundings';
+    observedMaxM = own.maxDepthM;
+    soundingsUsed = own.used;
+  } else if (survey) {
     const raster = rasterizeContourDepths(survey, waterMask, bounds, maxDepthM > 0 ? maxDepthM * FT_PER_M : undefined);
     for (let r = 0; r < size; r++) depths[r] = raster.depthsFt[r].map((ft) => Math.round(ft * 0.3048 * 100) / 100);
     bathymetrySource = 'idnr-sonar';
@@ -423,7 +435,7 @@ async function buildRealTerrain(
       }
     }
   }
-  return { elevations, waterMask, depths, surfaceElevationM, demSource, bathymetrySource, maxDepthM: observedMaxM, survey };
+  return { elevations, waterMask, depths, surfaceElevationM, demSource, bathymetrySource, maxDepthM: observedMaxM, survey, soundingsUsed };
 }
 
 function buildProceduralTerrain(lake: PredefinedLake, size: number): Grid {
@@ -584,7 +596,7 @@ export async function generateLakeTerrainGrid(
   const requestedSize = Math.max(32, Math.min(Math.round(gridSize) || 64, MAX_GRID));
   const cacheKey = options?.uploadedImage
     ? null
-    : JSON.stringify([query.trim().toLowerCase(), requestedSize, !!options?.forceAiRecon, options?.userNotes || '', !!options?.skipGeodata, options?.framePad ?? 0.28]);
+    : JSON.stringify([query.trim().toLowerCase(), requestedSize, !!options?.forceAiRecon, options?.userNotes || '', !!options?.skipGeodata, options?.framePad ?? 0.28, hashSoundings(options?.soundings)]);
   if (cacheKey) {
     const hit = resultCache.get(cacheKey);
     if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.data;
@@ -764,7 +776,7 @@ export async function generateLakeTerrainGrid(
       metadata.depthIsEstimated = true;
     }
     const demPref = (process.env.DEM_SOURCE as 'auto' | '3dep' | 'terrarium') || 'auto';
-    real = await buildRealTerrain(polygons, size, bounds, maxDepthM, survey, demPref);
+    real = await buildRealTerrain(polygons, size, bounds, maxDepthM, survey, options?.soundings?.length ? options.soundings : null, demPref);
     if (real) {
       grid = real;
       metadata.bounds = bounds;
@@ -780,7 +792,18 @@ export async function generateLakeTerrainGrid(
         metadata.areaAcres = Math.round(idnrOnly.areaKm2 * ACRES_PER_KM2);
       }
       metadata.id = `${normalise(metadata.name).replace(/\s+/g, '-')}-${(metadata.osmId || 'osm').replace('/', '-')}`;
-      if (survey) {
+      if (real.bathymetrySource === 'user-soundings') {
+        // The user's own measurements win over everything, the survey included
+        setDepth(metadata, real.maxDepthM);
+        metadata.depthIsEstimated = false;
+        metadata.soundingCount = real.soundingsUsed;
+        metadata.sources.unshift({
+          title: `Your soundings (${real.soundingsUsed} points inside the lake)`,
+          sourceType: 'hydrographic_database',
+          snippet: 'Depth grid interpolated from the uploaded soundings (inverse-distance weighting), shoreline held at zero depth.',
+        });
+        notes.push(`Bathymetry interpolated from ${real.soundingsUsed} of your soundings; deepest ${metadata.maxDepthFt} ft.`);
+      } else if (survey) {
         // Survey wins over every other depth source
         setDepth(metadata, real.maxDepthM, metadata.depthIsEstimated ? undefined : metadata.meanDepthM);
         metadata.depthIsEstimated = false;
@@ -815,7 +838,7 @@ export async function generateLakeTerrainGrid(
           ? { title: 'USGS 3D Elevation Program (3DEP) — LiDAR-derived DEM', uri: 'https://www.usgs.gov/3d-elevation-program', sourceType: 'dem', snippet: `Ground elevation from the National Map 3DEP image service (1 m where LiDAR exists; Indiana is fully covered). Lake surface = median DEM inside the shoreline.` }
           : { title: 'Terrarium terrain tiles (AWS Open Data / Mapzen)', uri: 'https://registry.opendata.aws/terrain-tiles/', sourceType: 'dem', snippet: 'Ground elevation from public terrain tiles (SRTM / NED composite). Lake surface = median tile elevation inside the polygon.' }
       );
-      if (metadata.generationMethod === 'heuristic') {
+      if (metadata.generationMethod === 'heuristic' && real.bathymetrySource !== 'user-soundings') {
         metadata.description = `${metadata.name} — shoreline from OpenStreetMap, terrain from ${real.demSource === '3dep' ? 'USGS 3DEP LiDAR' : 'Terrarium tiles'}. No Wikipedia record with a depth was found; depth profile is estimated.`;
       }
     }

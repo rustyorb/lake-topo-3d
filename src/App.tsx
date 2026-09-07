@@ -39,6 +39,9 @@ import { Waypoint, loadWaypoints, saveWaypoints, newWaypointId, nextWaypointName
 import type { OverlayLine, PickMode } from './lib/overlays.js';
 import { contourRoutes } from './lib/routes.js';
 import { SectionChart } from './components/SectionChart.js';
+import { ConditionsPanel, SunSettings, WindSettings } from './components/ConditionsPanel.js';
+import { sunPosition, localDateTime, localIsoDate } from './lib/sun.js';
+import { windblownShore } from './lib/wind.js';
 
 const FT_PER_M = 3.28084;
 const WAYPOINT_COLOR = 0xfacc15;
@@ -126,6 +129,19 @@ export default function App() {
   const structure = useMemo<StructureFeature[]>(() => (gridData ? analyzeStructure(gridData) : []), [gridData]);
   const routes = useMemo(() => (gridData ? contourRoutes(gridData, routeDepthFt, useSurveyContours) : []), [gridData, routeDepthFt, useSurveyContours]);
   useEffect(() => setSelectedRouteIds([]), [gridData, routeDepthFt]);
+
+  // Sun and wind conditions
+  const [sunCfg, setSunCfg] = useState<SunSettings>(() => {
+    const d = new Date();
+    return { enabled: false, date: localIsoDate(d), minutes: d.getHours() * 60 + d.getMinutes() };
+  });
+  const [wind, setWind] = useState<WindSettings>({ enabled: false, fromDeg: 225 });
+  const sunPos = useMemo(
+    () => (gridData && sunCfg.enabled ? sunPosition(localDateTime(sunCfg.date, sunCfg.minutes), gridData.metadata.lat, gridData.metadata.lon) : null),
+    [gridData, sunCfg]
+  );
+  const windShore = useMemo(() => (gridData && wind.enabled ? windblownShore(gridData, wind.fromDeg) : []), [gridData, wind]);
+  const sunLight = useMemo(() => (sunPos ? { enabled: true, ...sunPos } : { enabled: false, azimuthDeg: 0, elevationDeg: 0 }), [sunPos]);
   const lakeId = gridData?.metadata.id;
   useEffect(() => {
     setWaypoints(lakeId ? loadWaypoints(lakeId) : []);
@@ -183,8 +199,9 @@ export default function App() {
       out.push({ id: 'section', points: pts, color: '#f8fafc', dashed: true, endpoints: true });
     }
     for (const r of routes) if (selectedRouteIds.includes(r.id)) out.push({ id: r.id, points: r.points, color: '#f59e0b' });
+    windShore.forEach((pts, i) => out.push({ id: `wind-${i}`, points: pts, color: '#f97316' }));
     return out;
-  }, [section, routes, selectedRouteIds]);
+  }, [section, routes, selectedRouteIds, windShore]);
 
   const visibleStructure = useMemo(() => (showStructure ? structure.filter((f) => !hiddenKinds.includes(f.kind)) : []), [structure, hiddenKinds, showStructure]);
   const markers3d = useMemo<ViewerMarker[]>(() => [
@@ -488,7 +505,7 @@ export default function App() {
                         markers={markers3d}
                         selectedMarkerId={selectedMarkerId}
                         pickMode={pickMode} overlays={overlays}
-                        focusRequest={focusRequest}
+                        focusRequest={focusRequest} sun={sunLight} wind={wind}
                         onPick={handlePick}
                         onSelectMarker={setSelectedMarkerId}
                         onSetPickMode={setPickMode}
@@ -536,7 +553,7 @@ export default function App() {
                           markers={markers3d}
                           selectedMarkerId={selectedMarkerId}
                           pickMode={pickMode} overlays={overlays}
-                          focusRequest={focusRequest}
+                          focusRequest={focusRequest} sun={sunLight} wind={wind}
                           onPick={handlePick}
                           onSelectMarker={setSelectedMarkerId}
                           onSetPickMode={setPickMode}
@@ -637,6 +654,11 @@ export default function App() {
                 selectedRouteIds={selectedRouteIds}
                 onToggleRoute={(id) => setSelectedRouteIds((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]))}
               />
+            )}
+
+            {/* Sun position lighting and windblown shore */}
+            {gridData && (
+              <ConditionsPanel sun={sunCfg} onSunChange={setSunCfg} sunPos={sunPos} wind={wind} onWindChange={setWind} windblownRuns={windShore.length} />
             )}
 
             {/* 3D Manipulation Controls Panel */}

@@ -76,6 +76,10 @@ interface Lake3DViewerProps {
   onUpdateWaterLevelOffsetFt?: (offsetFt: number) => void;
   onSetPickMode?: (mode: PickMode) => void;
   onProbeInfo?: (info: ProbeInfo | null) => void;
+  /** Real sun position; when enabled the key light moves there and casts true-length shadows. */
+  sun?: { enabled: boolean; azimuthDeg: number; elevationDeg: number };
+  /** Wind direction (from, compass degrees) for the arrow above the model. */
+  wind?: { enabled: boolean; fromDeg: number };
 }
 
 /** Scene units per metre of relief: true scale (same as horizontal) times the exaggeration. */
@@ -128,6 +132,8 @@ export const Lake3DViewer: React.FC<Lake3DViewerProps> = ({
   onUpdateWaterMode,
   onSetPickMode,
   onProbeInfo,
+  sun,
+  wind,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -144,6 +150,8 @@ export const Lake3DViewer: React.FC<Lake3DViewerProps> = ({
   const markerGroupRef = useRef<THREE.Group | null>(null);
   const overlayGroupRef = useRef<THREE.Group | null>(null);
   const sunLightRef = useRef<THREE.DirectionalLight | null>(null);
+  const ambientRef = useRef<THREE.AmbientLight | null>(null);
+  const windArrowRef = useRef<THREE.ArrowHelper | null>(null);
   const shapedRef = useRef<number[][] | null>(null);
   const raycasterRef = useRef(new THREE.Raycaster());
   const mouseRef = useRef(new THREE.Vector2());
@@ -182,7 +190,9 @@ export const Lake3DViewer: React.FC<Lake3DViewerProps> = ({
     controls.target.set(0, 4, 0);
     controlsRef.current = controls;
 
-    scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+    const ambient = new THREE.AmbientLight(0xffffff, 0.7);
+    scene.add(ambient);
+    ambientRef.current = ambient;
     const sun = new THREE.DirectionalLight(0xfff7ed, 1.3);
     sun.position.set(120, 200, 100);
     sun.castShadow = true;
@@ -613,6 +623,49 @@ export const Lake3DViewer: React.FC<Lake3DViewerProps> = ({
     scene.add(group);
     overlayGroupRef.current = group;
   }, [gridData, verticalExaggeration, depthBoost, shadingStyle, terraceStepFt, terrainSharpness, overlays]);
+
+  // ---- sun: move the key light to the real solar position, with the elevation corrected for the
+  // vertical exaggeration (tan θ' = E · tan θ) so shadow lengths on the ground stay true.
+  useEffect(() => {
+    const light = sunLightRef.current;
+    const ambient = ambientRef.current;
+    if (!light) return;
+    if (!sun?.enabled) {
+      light.position.set(120, 200, 100);
+      light.intensity = 1.3;
+      light.color.set(0xfff7ed);
+      if (ambient) ambient.intensity = 0.7;
+      return;
+    }
+    const E = Math.max(0.1, verticalExaggeration);
+    const up = sun.elevationDeg > 0;
+    const elev = Math.max(0.5, sun.elevationDeg) * (Math.PI / 180);
+    const corrected = Math.atan(E * Math.tan(elev));
+    const az = sun.azimuthDeg * (Math.PI / 180);
+    const D = 320;
+    light.position.set(Math.sin(az) * Math.cos(corrected) * D, Math.sin(corrected) * D, -Math.cos(az) * Math.cos(corrected) * D);
+    const warmth = Math.min(1, Math.max(0, sun.elevationDeg / 15)); // 0 at the horizon, 1 above 15°
+    light.color.lerpColors(new THREE.Color(0xffb26b), new THREE.Color(0xffffff), warmth);
+    light.intensity = up ? 1.0 + 1.2 * warmth : 0.08;
+    if (ambient) ambient.intensity = up ? 0.3 : 0.16;
+  }, [sun?.enabled, sun?.azimuthDeg, sun?.elevationDeg, verticalExaggeration]);
+
+  // ---- wind arrow above the north-west corner, pointing where the wind blows
+  useEffect(() => {
+    const scene = sceneRef.current;
+    if (!scene) return;
+    if (windArrowRef.current) { scene.remove(windArrowRef.current); windArrowRef.current.dispose(); windArrowRef.current = null; }
+    if (!wind?.enabled) return;
+    const to = (wind.fromDeg + 180) * (Math.PI / 180);
+    const dir = new THREE.Vector3(Math.sin(to), 0, -Math.cos(to)).normalize();
+    const len = MODEL_WIDTH * 0.2;
+    const topY = yOf(gridData.maxElevation) + MODEL_WIDTH * 0.06;
+    const corner = new THREE.Vector3(-MODEL_WIDTH / 2, topY, -modelLength(gridData) / 2);
+    const origin = corner.sub(dir.clone().multiplyScalar(len / 2));
+    const arrow = new THREE.ArrowHelper(dir, origin, len, 0xf97316, len * 0.35, len * 0.18);
+    scene.add(arrow);
+    windArrowRef.current = arrow;
+  }, [wind?.enabled, wind?.fromDeg, gridData, verticalExaggeration, depthBoost]);
 
   // ---- fly to a cell
   useEffect(() => {

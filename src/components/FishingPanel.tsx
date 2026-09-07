@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Fish, MapPin, Thermometer, Crosshair, Download, Trash2, LocateFixed, Plus, Layers, Route as RouteIcon, Anchor, Upload } from 'lucide-react';
+import { Fish, MapPin, Thermometer, Crosshair, Download, Trash2, LocateFixed, Plus, Layers, Route as RouteIcon, Anchor, Upload, Ruler } from 'lucide-react';
 import { parseSoundings, ParsedSoundings, DepthUnit, Sounding } from '../lib/soundings.js';
 import { TerrainGridData } from '../types.js';
 import { STRUCTURE_KINDS, STRUCTURE_STYLE, StructureFeature, StructureKind, inDepthBand } from '../lib/structure.js';
@@ -138,14 +138,24 @@ export const FishingPanel: React.FC<FishingPanelProps> = ({
           <Fish className="w-4 h-4 text-emerald-400" />
           <h3 className="text-xs font-bold uppercase tracking-wider text-slate-200">Fishing layer</h3>
         </div>
-        <button
-          type="button"
-          onClick={() => onSetPickMode(pickMode === 'pin' ? 'none' : 'pin')}
-          className={`flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold transition cursor-pointer ${pickMode === 'pin' ? 'bg-yellow-400 text-slate-950' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}
-          title="Click the 3D model or the map to drop a waypoint. Shift-click works any time."
-        >
-          <MapPin className="w-3.5 h-3.5" /> {pickMode === 'pin' ? 'Pin mode on' : 'Drop pin'}
-        </button>
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => onSetPickMode(pickMode === 'pin' ? 'none' : 'pin')}
+            className={`flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold transition cursor-pointer ${pickMode === 'pin' ? 'bg-yellow-400 text-slate-950' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}
+            title="Click the 3D model or the map to drop a waypoint. Shift-click works any time."
+          >
+            <MapPin className="w-3.5 h-3.5" /> {pickMode === 'pin' ? 'Pin mode on' : 'Drop pin'}
+          </button>
+          <button
+            type="button"
+            onClick={() => onSetPickMode(pickMode === 'section' ? 'none' : 'section')}
+            className={`flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold transition cursor-pointer ${pickMode === 'section' ? 'bg-slate-100 text-slate-950' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}
+            title="Click two points on the model or the map to see the bottom profile between them"
+          >
+            <Ruler className="w-3.5 h-3.5" /> {pickMode === 'section' ? 'Pick 2 points' : 'Section'}
+          </button>
+        </div>
       </div>
 
       <div className="flex gap-1 p-1 bg-slate-950 rounded-xl border border-slate-800">

@@ -157,10 +157,11 @@ export const SectionChart: React.FC<SectionChartProps> = ({ data, a, b, structur
         <line x1={ML} x2={W - MR} y1={y0} y2={y0} stroke="#7dd3fc" strokeWidth={1.2} />
         <path d={bedPath} fill="none" stroke="#f8fafc" strokeWidth={1.6} strokeLinejoin="round" />
         {/* structure near the line */}
-        {near.map(({ feature: f, distanceM }) => (
+        {near.map(({ feature: f, distanceM }, i) => (
           <g key={f.id}>
             <circle cx={x(distanceM)} cy={y(-f.depthFt)} r={4.5} fill={STRUCTURE_STYLE[f.kind].color} stroke="#0b1220" strokeWidth={1.2} />
-            <text x={x(distanceM)} y={y(-f.depthFt) - 8} textAnchor="middle" fontSize={10} fill={STRUCTURE_STYLE[f.kind].color}>{f.label} {f.depthFt} ft</text>
+            {/* alternate labels above and below the dot so neighbours don't collide */}
+            <text x={x(distanceM)} y={y(-f.depthFt) + (i % 2 ? 16 : -8)} textAnchor="middle" fontSize={10} fill={STRUCTURE_STYLE[f.kind].color}>{f.label} {f.depthFt} ft</text>
           </g>
         ))}
         {/* end labels */}

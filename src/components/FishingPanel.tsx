@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
-import { Fish, MapPin, Thermometer, Crosshair, Download, Trash2, LocateFixed, Plus, Layers, Route as RouteIcon } from 'lucide-react';
+import { Fish, MapPin, Thermometer, Crosshair, Download, Trash2, LocateFixed, Plus, Layers, Route as RouteIcon, Anchor, Upload } from 'lucide-react';
+import { parseSoundings, ParsedSoundings, DepthUnit, Sounding } from '../lib/soundings.js';
 import { TerrainGridData } from '../types.js';
 import { STRUCTURE_KINDS, STRUCTURE_STYLE, StructureFeature, StructureKind, inDepthBand } from '../lib/structure.js';
 import { Waypoint } from '../lib/waypoints.js';
@@ -34,6 +35,10 @@ interface FishingPanelProps {
   routes: Route[];
   selectedRouteIds: string[];
   onToggleRoute: (id: string) => void;
+  soundings: Sounding[] | null;
+  onApplySoundings: (points: Sounding[]) => void;
+  onClearSoundings: () => void;
+  isLoading: boolean;
 }
 
 const PRESETS: Array<{ label: string; min: number; max: number; note: string }> = [
@@ -47,8 +52,31 @@ export const FishingPanel: React.FC<FishingPanelProps> = ({
   thermocline, onThermoclineChange, waypoints, onUpdateWaypoints, onAddWaypointFromFeature,
   selectedId, onSelect, onFocus, pickMode, onSetPickMode, useSurveyContours, onToggleSurveyContours,
   routeDepthFt, onRouteDepthChange, routes, selectedRouteIds, onToggleRoute,
+  soundings, onApplySoundings, onClearSoundings, isLoading,
 }) => {
-  const [section, setSection] = useState<'structure' | 'thermocline' | 'waypoints' | 'routes'>('structure');
+  const [section, setSection] = useState<'structure' | 'thermocline' | 'waypoints' | 'routes' | 'soundings'>('structure');
+  const [unit, setUnit] = useState<DepthUnit>('ft');
+  const [raw, setRaw] = useState<{ text: string; name: string } | null>(null);
+  const [parsed, setParsed] = useState<ParsedSoundings | null>(null);
+  const [parseError, setParseError] = useState<string | null>(null);
+  const parseFile = (text: string, name: string, u: DepthUnit) => {
+    const result = parseSoundings(text, name, u);
+    setParsed(result);
+    setParseError(result.points.length ? null : result.note || 'No usable points found.');
+  };
+  const onFile = async (file: File | undefined) => {
+    if (!file) return;
+    try {
+      const text = await file.text();
+      setRaw({ text, name: file.name });
+      parseFile(text, file.name, unit);
+    } catch (err: any) {
+      setParsed(null);
+      setParseError(err?.message || 'Could not read the file.');
+    }
+  };
+  const changeUnit = (u: DepthUnit) => { setUnit(u); if (raw) parseFile(raw.text, raw.name, u); };
+  const deepestParsedFt = parsed ? parsed.points.reduce((m, p) => Math.max(m, p.depthM), 0) * FT_PER_M : 0;
   const maxDepthFt = Math.max(5, Math.ceil(gridData.maxDepth * FT_PER_M));
   const hasSurvey = !!gridData.surveyContours?.length;
 
@@ -125,6 +153,7 @@ export const FishingPanel: React.FC<FishingPanelProps> = ({
         {tab('thermocline', 'Thermocline', <Thermometer className="w-3.5 h-3.5" />, thermocline.enabled ? inBand.length : undefined)}
         {tab('waypoints', 'Waypoints', <MapPin className="w-3.5 h-3.5" />, waypoints.length)}
         {tab('routes', 'Routes', <RouteIcon className="w-3.5 h-3.5" />, selectedRouteIds.length || undefined)}
+        {tab('soundings', 'Soundings', <Anchor className="w-3.5 h-3.5" />, soundings ? soundings.length : undefined)}
       </div>
 
       {section === 'structure' && (
@@ -290,6 +319,51 @@ export const FishingPanel: React.FC<FishingPanelProps> = ({
           </button>
           <p className="text-[10px] text-slate-500 leading-relaxed">
             Checked loops are drawn in amber on the model and the map. The GPX holds one track per loop; Humminbird, Lowrance and Garmin import tracks as trails you can steer along.
+          </p>
+        </div>
+      )}
+
+      {section === 'soundings' && (
+        <div className="space-y-2.5">
+          <p className="text-[11px] text-slate-300 leading-snug">
+            Bring your own bathymetry. Depth soundings from your sonar unit, a chart app or a notebook rebuild the lake bed, so outside Indiana the modelled bowl becomes what you actually measured.
+          </p>
+          {soundings && (
+            <div className="p-2 rounded-lg bg-emerald-950/40 border border-emerald-700/50 text-[11px] text-emerald-200 flex items-center gap-2">
+              <Anchor className="w-3.5 h-3.5 shrink-0" />
+              <span className="flex-1">
+                {gridData.metadata.bathymetrySource === 'user-soundings'
+                  ? <>Lake built from <strong>{gridData.metadata.soundingCount ?? soundings.length}</strong> of your {soundings.length.toLocaleString()} soundings.</>
+                  : <>{soundings.length.toLocaleString()} soundings loaded, but fewer than 3 fell inside this lake's shoreline, so the bed is unchanged.</>}
+              </span>
+              <button type="button" onClick={onClearSoundings} disabled={isLoading} className="px-2 py-1 rounded bg-slate-800 hover:bg-rose-900/60 text-slate-200 cursor-pointer disabled:opacity-40">Remove</button>
+            </div>
+          )}
+          <div className="flex items-center gap-2 text-[11px]">
+            <label className="flex-1 min-w-0 flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 cursor-pointer">
+              <Upload className="w-3.5 h-3.5 shrink-0" />
+              <span className="truncate">{raw?.name || 'Choose a CSV, TSV or GPX file'}</span>
+              <input type="file" accept=".csv,.txt,.tsv,.gpx" className="hidden" onChange={(e) => { onFile(e.target.files?.[0]); e.target.value = ''; }} />
+            </label>
+            <span className="text-slate-400">Depths in</span>
+            {(['ft', 'm'] as DepthUnit[]).map((u) => (
+              <button key={u} type="button" onClick={() => changeUnit(u)} className={`px-2 py-1 rounded font-mono cursor-pointer ${unit === u ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>{u}</button>
+            ))}
+          </div>
+          {parseError && <p className="text-[11px] text-rose-300">{parseError}</p>}
+          {parsed && parsed.points.length > 0 && (
+            <div className="space-y-1.5 text-[11px] text-slate-300">
+              <div>
+                <strong className="text-white">{parsed.points.length.toLocaleString()}</strong> points parsed{parsed.skipped ? `, ${parsed.skipped} skipped` : ''} · depths read as {parsed.unitUsed} · deepest <span className="font-mono text-cyan-300">{deepestParsedFt.toFixed(1)} ft</span>
+                {parsed.note ? <span className="text-slate-500"> · {parsed.note}</span> : null}
+              </div>
+              <button type="button" onClick={() => onApplySoundings(parsed.points)} disabled={isLoading} className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg font-semibold bg-emerald-600 hover:bg-emerald-500 text-white cursor-pointer disabled:opacity-40">
+                <Anchor className="w-3.5 h-3.5" /> Rebuild {gridData.metadata.name} from these soundings
+              </button>
+            </div>
+          )}
+          <p className="text-[10px] text-slate-500 leading-relaxed">
+            CSV needs latitude, longitude and depth columns; a header row is optional (lat, lon, depth order without one). GPX waypoints or track points use a &lt;depth&gt; tag, &lt;ele&gt;, or the first number in the name or description. Up to 50,000 points. The shoreline is held at zero depth and everything between soundings is interpolated, so the result is only as good as your coverage.
           </p>
         </div>
       )}

@@ -42,6 +42,7 @@ import { SectionChart } from './components/SectionChart.js';
 import { ConditionsPanel, SunSettings, WindSettings } from './components/ConditionsPanel.js';
 import { sunPosition, localDateTime, localIsoDate } from './lib/sun.js';
 import { windblownShore } from './lib/wind.js';
+import type { Sounding } from './lib/soundings.js';
 
 const FT_PER_M = 3.28084;
 const WAYPOINT_COLOR = 0xfacc15;
@@ -125,6 +126,9 @@ export default function App() {
   const [useSurveyContours, setUseSurveyContours] = useState<boolean>(true);
   const [routeDepthFt, setRouteDepthFt] = useState<number>(10);
   const [selectedRouteIds, setSelectedRouteIds] = useState<string[]>([]);
+  // The user's own depth soundings; the ref lets re-fetches (frame toggle, AI recon) keep them
+  const [soundings, setSoundings] = useState<Sounding[] | null>(null);
+  const soundingsRef = useRef<Sounding[] | null>(null);
 
   const structure = useMemo<StructureFeature[]>(() => (gridData ? analyzeStructure(gridData) : []), [gridData]);
   const routes = useMemo(() => (gridData ? contourRoutes(gridData, routeDepthFt, useSurveyContours) : []), [gridData, routeDepthFt, useSurveyContours]);
@@ -214,21 +218,27 @@ export default function App() {
   ], [visibleStructure, waypoints]);
 
   // Fetch lake data with optional AI recon and user notes
-  const fetchLakeData = useCallback(async (query: string, options?: { forceAiRecon?: boolean; userNotes?: string; frame?: 'terrain' | 'lake' }) => {
+  const fetchLakeData = useCallback(async (query: string, options?: { forceAiRecon?: boolean; userNotes?: string; frame?: 'terrain' | 'lake'; soundings?: Sounding[] | null }) => {
     setIsLoading(true);
     setError(null);
     try {
-      let url = `/api/lake-terrain?q=${encodeURIComponent(query)}&gridSize=${GRID_SIZE}`;
-      if ((options?.frame ?? frameModeRef.current) === 'lake') {
-        url += `&framePad=0.06`;
+      const framePad = (options?.frame ?? frameModeRef.current) === 'lake' ? 0.06 : undefined;
+      const own = options?.soundings === undefined ? soundingsRef.current : options.soundings;
+      let res: Response;
+      if (own && own.length) {
+        // Soundings travel in the body; the server rebuilds the bed from them
+        res = await fetch('/api/lake-terrain', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query, gridSize: GRID_SIZE, framePad, forceAiRecon: options?.forceAiRecon, userNotes: options?.userNotes, soundings: own }),
+        });
+      } else {
+        let url = `/api/lake-terrain?q=${encodeURIComponent(query)}&gridSize=${GRID_SIZE}`;
+        if (framePad !== undefined) url += `&framePad=${framePad}`;
+        if (options?.forceAiRecon) url += `&forceAiRecon=true`;
+        if (options?.userNotes) url += `&userNotes=${encodeURIComponent(options.userNotes)}`;
+        res = await fetch(url);
       }
-      if (options?.forceAiRecon) {
-        url += `&forceAiRecon=true`;
-      }
-      if (options?.userNotes) {
-        url += `&userNotes=${encodeURIComponent(options.userNotes)}`;
-      }
-      const res = await fetch(url);
       if (!res.ok) {
         const body = await res.json().catch(() => null);
         throw new Error(body?.error || `Failed to load lake terrain (${res.status})`);
@@ -246,8 +256,20 @@ export default function App() {
     }
   }, []);
 
+  const applySoundings = useCallback((points: Sounding[]) => {
+    soundingsRef.current = points;
+    setSoundings(points);
+    fetchLakeData(currentQuery, { soundings: points });
+  }, [currentQuery, fetchLakeData]);
+  const resetSoundings = () => { soundingsRef.current = null; setSoundings(null); };
+  const clearSoundings = useCallback(() => {
+    resetSoundings();
+    fetchLakeData(currentQuery, { soundings: null });
+  }, [currentQuery, fetchLakeData]);
+
   // Handle upload of topo map image via Gemini Vision
   const handleUploadTopoImage = async (imageBase64: string, mimeType: string, lakeName?: string) => {
+    resetSoundings();
     setIsLoading(true);
     setError(null);
     try {
@@ -285,12 +307,14 @@ export default function App() {
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (searchQuery.trim()) {
+      if (searchQuery.trim() !== currentQuery) resetSoundings(); // soundings belong to one lake
       fetchLakeData(searchQuery.trim());
     }
   };
 
   const selectLakePreset = (lakeQuery: string) => {
     setSearchQuery(lakeQuery);
+    if (lakeQuery !== currentQuery) resetSoundings();
     fetchLakeData(lakeQuery);
   };
 
@@ -653,6 +677,10 @@ export default function App() {
                 routes={routes}
                 selectedRouteIds={selectedRouteIds}
                 onToggleRoute={(id) => setSelectedRouteIds((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]))}
+                soundings={soundings}
+                onApplySoundings={applySoundings}
+                onClearSoundings={clearSoundings}
+                isLoading={isLoading}
               />
             )}
 

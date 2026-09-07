@@ -271,7 +271,9 @@ export function generateSvgTopoMap(data: TerrainGridData): string {
       ? 'Hand-built survey approximation (offline model)'
       : 'Procedural placeholder geometry — no survey data';
   const depthLabel =
-    metadata.bathymetrySource === 'idnr-sonar'
+    metadata.bathymetrySource === 'user-soundings'
+      ? `Depths: interpolated from ${metadata.soundingCount ?? 0} user-supplied soundings (not an official survey)`
+      : metadata.bathymetrySource === 'idnr-sonar'
       ? `Depths: IDNR sonar survey${metadata.surveyDate ? ` ${metadata.surveyDate}` : ''}, ${metadata.contourIntervalFt || 5} ft contours, interpolated`
       : metadata.depthIsEstimated
       ? 'Depths: estimated (distance-to-shore model)'

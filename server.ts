@@ -82,13 +82,21 @@ async function startServer() {
 
   app.post('/api/lake-terrain', async (req, res) => {
     try {
-      const { query, gridSize, forceAiRecon, userNotes, uploadedImage, offline, framePad } = req.body || {};
+      const { query, gridSize, forceAiRecon, userNotes, uploadedImage, offline, framePad, soundings } = req.body || {};
+      // User-supplied depth soundings: [{ lat, lon, depthM }], capped, non-numeric rows dropped
+      const own = Array.isArray(soundings)
+        ? soundings
+            .slice(0, 50_000)
+            .map((p: any) => ({ lat: Number(p?.lat), lon: Number(p?.lon), depthM: Number(p?.depthM) }))
+            .filter((p: { lat: number; lon: number; depthM: number }) => Number.isFinite(p.lat) && Number.isFinite(p.lon) && Number.isFinite(p.depthM))
+        : [];
       const data = await generateLakeTerrainGrid(query || DEFAULT_QUERY, parseGrid(gridSize), {
         forceAiRecon: Boolean(forceAiRecon),
         userNotes,
         uploadedImage,
         skipGeodata: Boolean(offline),
         framePad: framePad !== undefined ? Number(framePad) : undefined,
+        soundings: own.length ? own : undefined,
       });
       res.json(data);
     } catch (err: any) {

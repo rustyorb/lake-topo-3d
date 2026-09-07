@@ -36,6 +36,7 @@ import { suggestDepthBoost } from './lib/relief.js';
 import { describeBathymetry, describeDem, describeGeometry, describeMethod } from './lib/labels.js';
 import { analyzeStructure, gridToLatLon, STRUCTURE_STYLE, StructureFeature, StructureKind } from './lib/structure.js';
 import { Waypoint, loadWaypoints, saveWaypoints, newWaypointId, nextWaypointName } from './lib/waypoints.js';
+import type { OverlayLine, PickMode } from './lib/overlays.js';
 
 const FT_PER_M = 3.28084;
 const WAYPOINT_COLOR = 0xfacc15;
@@ -113,7 +114,8 @@ export default function App() {
   const [thermocline, setThermocline] = useState<ThermoclineBand>({ enabled: false, minFt: 18, maxFt: 28 });
   const [waypoints, setWaypoints] = useState<Waypoint[]>([]);
   const [selectedMarkerId, setSelectedMarkerId] = useState<string | null>(null);
-  const [pinMode, setPinMode] = useState<boolean>(false);
+  const [pickMode, setPickMode] = useState<PickMode>('none');
+  const [section, setSection] = useState<{ a: { row: number; col: number }; b: { row: number; col: number } | null } | null>(null);
   const [focusRequest, setFocusRequest] = useState<{ row: number; col: number; nonce: number } | null>(null);
   const [useSurveyContours, setUseSurveyContours] = useState<boolean>(true);
 
@@ -123,6 +125,7 @@ export default function App() {
     setWaypoints(lakeId ? loadWaypoints(lakeId) : []);
     setSelectedMarkerId(null);
     setFocusRequest(null);
+    setSection(null);
   }, [lakeId]);
 
   const updateWaypoints = useCallback((next: Waypoint[]) => {
@@ -154,6 +157,27 @@ export default function App() {
   }, [addWaypoint]);
 
   const focusOn = useCallback((row: number, col: number) => setFocusRequest({ row, col, nonce: Date.now() }), []);
+
+  // A click in a pick mode: drop a pin, or set one end of the cross-section (A, then B, then leave the mode).
+  const handlePick = useCallback((cell: { row: number; col: number }, mode: 'pin' | 'section') => {
+    if (mode === 'pin') { addWaypoint(cell.row, cell.col); return; }
+    setSection((s) => (!s || s.b ? { a: cell, b: null } : { a: s.a, b: cell }));
+  }, [addWaypoint]);
+  useEffect(() => {
+    if (section?.b && pickMode === 'section') setPickMode('none');
+  }, [section, pickMode]);
+
+  const overlays = useMemo<OverlayLine[]>(() => {
+    const out: OverlayLine[] = [];
+    if (section) {
+      const b = section.b ?? section.a;
+      const pts: Array<[number, number]> = [];
+      const n = 64;
+      for (let i = 0; i <= n; i++) pts.push([section.a.col + ((b.col - section.a.col) * i) / n, section.a.row + ((b.row - section.a.row) * i) / n]);
+      out.push({ id: 'section', points: pts, color: '#f8fafc', dashed: true, endpoints: true });
+    }
+    return out;
+  }, [section]);
 
   const visibleStructure = useMemo(() => (showStructure ? structure.filter((f) => !hiddenKinds.includes(f.kind)) : []), [structure, hiddenKinds, showStructure]);
   const markers3d = useMemo<ViewerMarker[]>(() => [
@@ -456,11 +480,11 @@ export default function App() {
                         thermocline={thermocline}
                         markers={markers3d}
                         selectedMarkerId={selectedMarkerId}
-                        pinMode={pinMode}
+                        pickMode={pickMode} overlays={overlays}
                         focusRequest={focusRequest}
-                        onDropPin={(cell) => addWaypoint(cell.row, cell.col)}
+                        onPick={handlePick}
                         onSelectMarker={setSelectedMarkerId}
-                        onTogglePinMode={setPinMode}
+                        onSetPickMode={setPickMode}
                       />
                     </div>
                   )}
@@ -468,7 +492,7 @@ export default function App() {
                   {/* Mode 2: 2D Topo Map Only */}
                   {viewMode === 'topo' && (
                     <div className="w-full h-full flex-1 min-h-[520px]">
-                      <TopoMapViewer gridData={gridData} markers={markers2d} selectedMarkerId={selectedMarkerId} pinMode={pinMode} onDropPin={(cell) => addWaypoint(cell.row, cell.col)} onSelectMarker={setSelectedMarkerId} />
+                      <TopoMapViewer gridData={gridData} markers={markers2d} selectedMarkerId={selectedMarkerId} pickMode={pickMode} overlays={overlays} onPick={handlePick} onSelectMarker={setSelectedMarkerId} />
                     </div>
                   )}
 
@@ -504,15 +528,15 @@ export default function App() {
                           thermocline={thermocline}
                           markers={markers3d}
                           selectedMarkerId={selectedMarkerId}
-                          pinMode={pinMode}
+                          pickMode={pickMode} overlays={overlays}
                           focusRequest={focusRequest}
-                          onDropPin={(cell) => addWaypoint(cell.row, cell.col)}
+                          onPick={handlePick}
                           onSelectMarker={setSelectedMarkerId}
-                          onTogglePinMode={setPinMode}
+                          onSetPickMode={setPickMode}
                         />
                       </div>
                       <div className="h-[520px] rounded-xl overflow-hidden border border-slate-800">
-                        <TopoMapViewer gridData={gridData} markers={markers2d} selectedMarkerId={selectedMarkerId} pinMode={pinMode} onDropPin={(cell) => addWaypoint(cell.row, cell.col)} onSelectMarker={setSelectedMarkerId} />
+                        <TopoMapViewer gridData={gridData} markers={markers2d} selectedMarkerId={selectedMarkerId} pickMode={pickMode} overlays={overlays} onPick={handlePick} onSelectMarker={setSelectedMarkerId} />
                       </div>
                     </div>
                   )}
@@ -583,8 +607,8 @@ export default function App() {
                 selectedId={selectedMarkerId}
                 onSelect={setSelectedMarkerId}
                 onFocus={focusOn}
-                pinMode={pinMode}
-                onTogglePinMode={setPinMode}
+                pickMode={pickMode}
+                onSetPickMode={setPickMode}
                 useSurveyContours={useSurveyContours}
                 onToggleSurveyContours={setUseSurveyContours}
               />

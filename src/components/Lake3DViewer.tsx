@@ -5,7 +5,8 @@ import { ColorSchemeMode, TerrainGridData, TerrainShadingStyle } from '../types.
 import { fieldFrom2D, isolines, levelRange, sampleBilinear } from '../lib/contours.js';
 import { gridToLatLon } from '../lib/structure.js';
 import { boostedElevation, boostedMinElevation } from '../lib/relief.js';
-import { Compass, RotateCcw, Eye, Waves, Mountain, MapPin } from 'lucide-react';
+import type { OverlayLine, PickMode } from '../lib/overlays.js';
+import { Compass, RotateCcw, Eye, Waves, Mountain, MapPin, Ruler } from 'lucide-react';
 
 export type WaterDisplayMode = 'carved-bed' | 'translucent' | 'filled';
 
@@ -61,17 +62,19 @@ interface Lake3DViewerProps {
   thermocline?: ThermoclineBand;
   markers?: ViewerMarker[];
   selectedMarkerId?: string | null;
-  /** When true a plain click drops a waypoint; shift-click always does. */
-  pinMode?: boolean;
+  /** What a plain click does; shift-click always drops a pin. */
+  pickMode?: PickMode;
+  /** Lines draped on the surface: section line, contour routes, windblown shore. */
+  overlays?: OverlayLine[];
   focusRequest?: { row: number; col: number; nonce: number } | null;
-  onDropPin?: (cell: { row: number; col: number }) => void;
+  onPick?: (cell: { row: number; col: number }, mode: Exclude<PickMode, 'none'>) => void;
   onSelectMarker?: (id: string) => void;
   onUpdateShadingStyle?: (style: TerrainShadingStyle) => void;
   onUpdateTerraceStep?: (stepFt: number) => void;
   onUpdateFlatShading?: (flat: boolean) => void;
   onUpdateWaterMode?: (mode: WaterDisplayMode) => void;
   onUpdateWaterLevelOffsetFt?: (offsetFt: number) => void;
-  onTogglePinMode?: (on: boolean) => void;
+  onSetPickMode?: (mode: PickMode) => void;
   onProbeInfo?: (info: ProbeInfo | null) => void;
 }
 
@@ -115,14 +118,15 @@ export const Lake3DViewer: React.FC<Lake3DViewerProps> = ({
   thermocline,
   markers = [],
   selectedMarkerId = null,
-  pinMode = false,
+  pickMode = 'none' as PickMode,
+  overlays = [] as OverlayLine[],
   focusRequest = null,
-  onDropPin,
+  onPick,
   onSelectMarker,
   onUpdateShadingStyle,
   onUpdateTerraceStep,
   onUpdateWaterMode,
-  onTogglePinMode,
+  onSetPickMode,
   onProbeInfo,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -138,6 +142,8 @@ export const Lake3DViewer: React.FC<Lake3DViewerProps> = ({
   const contourGroupRef = useRef<THREE.Group | null>(null);
   const waterMeshRef = useRef<THREE.Mesh | null>(null);
   const markerGroupRef = useRef<THREE.Group | null>(null);
+  const overlayGroupRef = useRef<THREE.Group | null>(null);
+  const sunLightRef = useRef<THREE.DirectionalLight | null>(null);
   const shapedRef = useRef<number[][] | null>(null);
   const raycasterRef = useRef(new THREE.Raycaster());
   const mouseRef = useRef(new THREE.Vector2());
@@ -180,8 +186,16 @@ export const Lake3DViewer: React.FC<Lake3DViewerProps> = ({
     const sun = new THREE.DirectionalLight(0xfff7ed, 1.3);
     sun.position.set(120, 200, 100);
     sun.castShadow = true;
-    sun.shadow.mapSize.set(1024, 1024);
+    sun.shadow.mapSize.set(2048, 2048);
+    // Three's default shadow camera is a ±5-unit box; widen it so the whole model casts shadows.
+    const shadowCam = sun.shadow.camera;
+    shadowCam.left = -MODEL_WIDTH * 1.1; shadowCam.right = MODEL_WIDTH * 1.1;
+    shadowCam.top = MODEL_WIDTH * 1.1; shadowCam.bottom = -MODEL_WIDTH * 1.1;
+    shadowCam.near = 1; shadowCam.far = 900;
+    sun.shadow.bias = -0.0006;
     scene.add(sun);
+    scene.add(sun.target);
+    sunLightRef.current = sun;
     const fill = new THREE.DirectionalLight(0x93c5fd, 0.45);
     fill.position.set(-100, 80, -100);
     scene.add(fill);
@@ -559,6 +573,47 @@ export const Lake3DViewer: React.FC<Lake3DViewerProps> = ({
     markerGroupRef.current = group;
   }, [gridData, verticalExaggeration, depthBoost, shadingStyle, terraceStepFt, terrainSharpness, markers, selectedMarkerId]);
 
+  // ---- overlay lines (section line, contour routes, windblown shore), draped on the boosted surface
+  useEffect(() => {
+    const scene = sceneRef.current;
+    if (!scene) return;
+    disposeObject(overlayGroupRef.current);
+    overlayGroupRef.current = null;
+    const shaped = shapedRef.current;
+    if (!shaped || !overlays.length) return;
+    const group = new THREE.Group();
+    const n = gridData.gridSize;
+    const lift = 0.12 + verticalScale(gridData, verticalExaggeration) * 0.03;
+    const dotGeo = new THREE.SphereGeometry(MODEL_WIDTH * 0.009, 12, 8);
+    for (const line of overlays) {
+      if (line.points.length < 2) continue;
+      const pts: THREE.Vector3[] = [];
+      for (const [c, r] of line.points) {
+        const col = Math.max(0, Math.min(n - 1, c));
+        const row = Math.max(0, Math.min(n - 1, r));
+        pts.push(new THREE.Vector3(xOf(col), yOf(sampleBilinear(shaped, col, row)) + lift, zOf(row)));
+      }
+      const geo = new THREE.BufferGeometry().setFromPoints(pts);
+      const color = new THREE.Color(line.color);
+      if (line.dashed) {
+        const obj = new THREE.Line(geo, new THREE.LineDashedMaterial({ color, dashSize: 1.4, gapSize: 0.9 }));
+        obj.computeLineDistances();
+        group.add(obj);
+      } else {
+        group.add(new THREE.Line(geo, new THREE.LineBasicMaterial({ color })));
+      }
+      if (line.endpoints) {
+        for (const p of [pts[0], pts[pts.length - 1]]) {
+          const dot = new THREE.Mesh(dotGeo, new THREE.MeshBasicMaterial({ color }));
+          dot.position.copy(p);
+          group.add(dot);
+        }
+      }
+    }
+    scene.add(group);
+    overlayGroupRef.current = group;
+  }, [gridData, verticalExaggeration, depthBoost, shadingStyle, terraceStepFt, terrainSharpness, overlays]);
+
   // ---- fly to a cell
   useEffect(() => {
     if (!focusRequest || !cameraRef.current || !controlsRef.current || !shapedRef.current) return;
@@ -715,9 +770,11 @@ export const Lake3DViewer: React.FC<Lake3DViewerProps> = ({
       const mh = raycasterRef.current.intersectObjects(markerGroupRef.current.children, false).find((h) => h.object.userData?.id);
       if (mh) { onSelectMarker?.(mh.object.userData.id); return; }
     }
-    if (pinMode || e.shiftKey) {
+    let mode: PickMode = pickMode;
+    if (e.shiftKey) mode = 'pin';
+    if (mode !== 'none') {
       const cell = terrainHitToCell();
-      if (cell) onDropPin?.(cell);
+      if (cell) onPick?.(cell, mode);
     }
   };
 
@@ -757,7 +814,7 @@ export const Lake3DViewer: React.FC<Lake3DViewerProps> = ({
     <div ref={containerRef} className="relative w-full h-full min-h-[460px] bg-slate-950 overflow-hidden rounded-xl select-none">
       <canvas
         ref={canvasRef}
-        className={`w-full h-full block ${pinMode ? 'cursor-crosshair' : 'cursor-grab active:cursor-grabbing'}`}
+        className={`w-full h-full block ${pickMode !== 'none' ? 'cursor-crosshair' : 'cursor-grab active:cursor-grabbing'}`}
         onPointerMove={handlePointerMove}
         onPointerLeave={handlePointerLeave}
         onPointerDown={handlePointerDown}
@@ -773,11 +830,18 @@ export const Lake3DViewer: React.FC<Lake3DViewerProps> = ({
         <button onClick={() => setPresetView('lake')} className="px-2 py-1 rounded bg-cyan-900/70 hover:bg-cyan-800 text-cyan-100 transition-colors cursor-pointer" title="Frame just the water">Lake</button>
         <button onClick={() => setPresetView('iso')} className="p-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors ml-1 cursor-pointer" title="Reset camera"><RotateCcw className="w-3.5 h-3.5" /></button>
         <button
-          onClick={() => onTogglePinMode?.(!pinMode)}
-          className={`ml-1 px-2 py-1 rounded font-medium transition-all cursor-pointer flex items-center gap-1 ${pinMode ? 'bg-yellow-400 text-slate-950 font-bold' : 'bg-slate-800 hover:bg-slate-700 text-slate-200'}`}
+          onClick={() => onSetPickMode?.(pickMode === 'pin' ? 'none' : 'pin')}
+          className={`ml-1 px-2 py-1 rounded font-medium transition-all cursor-pointer flex items-center gap-1 ${pickMode === 'pin' ? 'bg-yellow-400 text-slate-950 font-bold' : 'bg-slate-800 hover:bg-slate-700 text-slate-200'}`}
           title="Click the lake to drop a waypoint (or shift-click any time)"
         >
-          <MapPin className="w-3.5 h-3.5" /> {pinMode ? 'Dropping pins' : 'Drop pin'}
+          <MapPin className="w-3.5 h-3.5" /> {pickMode === 'pin' ? 'Dropping pins' : 'Drop pin'}
+        </button>
+        <button
+          onClick={() => onSetPickMode?.(pickMode === 'section' ? 'none' : 'section')}
+          className={`px-2 py-1 rounded font-medium transition-all cursor-pointer flex items-center gap-1 ${pickMode === 'section' ? 'bg-slate-100 text-slate-950 font-bold' : 'bg-slate-800 hover:bg-slate-700 text-slate-200'}`}
+          title="Click two points on the model to see the bottom profile between them"
+        >
+          <Ruler className="w-3.5 h-3.5" /> {pickMode === 'section' ? 'Pick 2 points' : 'Section'}
         </button>
       </div>
 

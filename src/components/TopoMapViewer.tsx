@@ -14,6 +14,7 @@ import { TerrainGridData, TopoFeature } from '../types.js';
 import { describeGeometry } from '../lib/labels.js';
 import { gridToLatLon } from '../lib/structure.js';
 import { svgMapFrame, gridToSvg, svgToGrid, SVG_MAP_SIZE } from '../lib/mapFrame.js';
+import type { OverlayLine, PickMode } from '../lib/overlays.js';
 
 /** Marker overlaid on the 2D map (structure feature or waypoint). */
 export interface MapMarker {
@@ -31,14 +32,15 @@ interface TopoMapViewerProps {
   onSelectFeature?: (feature: TopoFeature) => void;
   markers?: MapMarker[];
   selectedMarkerId?: string | null;
-  pinMode?: boolean;
-  onDropPin?: (cell: { row: number; col: number }) => void;
+  pickMode?: PickMode;
+  overlays?: OverlayLine[];
+  onPick?: (cell: { row: number; col: number }, mode: Exclude<PickMode, 'none'>) => void;
   onSelectMarker?: (id: string) => void;
 }
 
 const FT_PER_M = 3.28084;
 
-export const TopoMapViewer: React.FC<TopoMapViewerProps> = ({ gridData, onSelectFeature, markers = [], selectedMarkerId = null, pinMode = false, onDropPin, onSelectMarker }) => {
+export const TopoMapViewer: React.FC<TopoMapViewerProps> = ({ gridData, onSelectFeature, markers = [], selectedMarkerId = null, pickMode = 'none' as PickMode, overlays = [] as OverlayLine[], onPick, onSelectMarker }) => {
   const [zoom, setZoom] = useState<number>(1);
   const [pan, setPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState<boolean>(false);
@@ -94,9 +96,11 @@ export const TopoMapViewer: React.FC<TopoMapViewerProps> = ({ gridData, onSelect
     const down = downRef.current;
     downRef.current = null;
     if (!down || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 5) return; // a drag, not a click
-    if (!(pinMode || e.shiftKey)) return;
+    let mode: PickMode = pickMode;
+    if (e.shiftKey) mode = 'pin';
+    if (mode === 'none') return;
     const cell = cellUnderMouse(e);
-    if (cell) onDropPin?.(cell);
+    if (cell) onPick?.(cell, mode);
   };
 
   const handleMouseLeave = () => {
@@ -192,7 +196,7 @@ export const TopoMapViewer: React.FC<TopoMapViewerProps> = ({ gridData, onSelect
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseLeave}
-        style={pinMode ? { cursor: 'crosshair' } : undefined}
+        style={pickMode !== 'none' ? { cursor: 'crosshair' } : undefined}
       >
         <div 
           className="transition-transform duration-75 ease-out max-w-full max-h-full flex items-center justify-center p-4"
@@ -203,6 +207,24 @@ export const TopoMapViewer: React.FC<TopoMapViewerProps> = ({ gridData, onSelect
           {gridData.svgTopoMap ? (
             <div ref={sheetRef} className="relative w-[680px] h-[680px] shadow-2xl rounded-lg overflow-hidden border border-slate-700/60 bg-[#f7f3ea]">
               <div className="w-full h-full" dangerouslySetInnerHTML={{ __html: gridData.svgTopoMap }} />
+              {/* Overlay lines in SVG page space; stroke widths counter-scaled so they stay constant at any zoom */}
+              {overlays.length > 0 && (
+                <svg className="absolute inset-0 w-full h-full pointer-events-none" viewBox={`0 0 ${SVG_MAP_SIZE} ${SVG_MAP_SIZE}`}>
+                  {overlays.map((o) => {
+                    const pts = o.points.map(([c, r]) => gridToSvg(frame, gridData.gridSize, c, r));
+                    const d = pts.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+                    return (
+                      <g key={o.id}>
+                        <polyline points={d} fill="none" stroke="#0f172a" strokeWidth={3.2 / zoom} strokeOpacity={0.55} strokeLinejoin="round" strokeLinecap="round" />
+                        <polyline points={d} fill="none" stroke={o.color} strokeWidth={1.8 / zoom} strokeDasharray={o.dashed ? `${6 / zoom} ${4 / zoom}` : undefined} strokeLinejoin="round" strokeLinecap="round" />
+                        {o.endpoints && [pts[0], pts[pts.length - 1]].map((p, i) => (
+                          <circle key={i} cx={p.x} cy={p.y} r={4 / zoom} fill={o.color} stroke="#0f172a" strokeWidth={1 / zoom} />
+                        ))}
+                      </g>
+                    );
+                  })}
+                </svg>
+              )}
               {/* Overlay markers positioned in SVG page space; counter-scaled so they stay the same size at any zoom */}
               {markers.map((m) => {
                 const p = gridToSvg(frame, gridData.gridSize, m.col, m.row);
@@ -240,7 +262,8 @@ export const TopoMapViewer: React.FC<TopoMapViewerProps> = ({ gridData, onSelect
             <span className={cursor.isWater ? 'text-cyan-300' : 'text-emerald-300'}>{cursor.isWater ? `${cursor.depthFt} ft deep` : `${cursor.elevFt} ft elev`}</span>
             <span className="text-slate-500"> · </span>
             <span className="text-slate-300">{cursor.lat.toFixed(5)}, {cursor.lon.toFixed(5)}</span>
-            {(pinMode) && <span className="text-yellow-300"> · click to pin</span>}
+            {pickMode === 'pin' && <span className="text-yellow-300"> · click to pin</span>}
+            {pickMode === 'section' && <span className="text-white"> · click to set the section</span>}
           </div>
         )}
 

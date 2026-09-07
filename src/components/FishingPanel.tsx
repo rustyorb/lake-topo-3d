@@ -5,6 +5,7 @@ import { STRUCTURE_KINDS, STRUCTURE_STYLE, StructureFeature, StructureKind, inDe
 import { Waypoint } from '../lib/waypoints.js';
 import { buildGpx, downloadText } from '../lib/gpx.js';
 import type { ThermoclineBand } from './Lake3DViewer.js';
+import type { PickMode } from '../lib/overlays.js';
 
 const FT_PER_M = 3.28084;
 
@@ -23,8 +24,8 @@ interface FishingPanelProps {
   selectedId: string | null;
   onSelect: (id: string | null) => void;
   onFocus: (row: number, col: number) => void;
-  pinMode: boolean;
-  onTogglePinMode: (on: boolean) => void;
+  pickMode: PickMode;
+  onSetPickMode: (mode: PickMode) => void;
   useSurveyContours: boolean;
   onToggleSurveyContours: (on: boolean) => void;
 }
@@ -38,7 +39,7 @@ const PRESETS: Array<{ label: string; min: number; max: number; note: string }> 
 export const FishingPanel: React.FC<FishingPanelProps> = ({
   gridData, structure, hiddenKinds, onToggleKind, showStructure, onToggleStructure,
   thermocline, onThermoclineChange, waypoints, onUpdateWaypoints, onAddWaypointFromFeature,
-  selectedId, onSelect, onFocus, pinMode, onTogglePinMode, useSurveyContours, onToggleSurveyContours,
+  selectedId, onSelect, onFocus, pickMode, onSetPickMode, useSurveyContours, onToggleSurveyContours,
 }) => {
   const [section, setSection] = useState<'structure' | 'thermocline' | 'waypoints'>('structure');
   const maxDepthFt = Math.max(5, Math.ceil(gridData.maxDepth * FT_PER_M));
@@ -91,11 +92,11 @@ export const FishingPanel: React.FC<FishingPanelProps> = ({
         </div>
         <button
           type="button"
-          onClick={() => onTogglePinMode(!pinMode)}
-          className={`flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold transition cursor-pointer ${pinMode ? 'bg-yellow-400 text-slate-950' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}
+          onClick={() => onSetPickMode(pickMode === 'pin' ? 'none' : 'pin')}
+          className={`flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold transition cursor-pointer ${pickMode === 'pin' ? 'bg-yellow-400 text-slate-950' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}
           title="Click the 3D model or the map to drop a waypoint. Shift-click works any time."
         >
-          <MapPin className="w-3.5 h-3.5" /> {pinMode ? 'Pin mode on' : 'Drop pin'}
+          <MapPin className="w-3.5 h-3.5" /> {pickMode === 'pin' ? 'Pin mode on' : 'Drop pin'}
         </button>
       </div>
 

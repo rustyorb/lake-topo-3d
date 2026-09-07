@@ -1,9 +1,10 @@
 import React, { useMemo, useState } from 'react';
-import { Fish, MapPin, Thermometer, Crosshair, Download, Trash2, LocateFixed, Plus, Layers } from 'lucide-react';
+import { Fish, MapPin, Thermometer, Crosshair, Download, Trash2, LocateFixed, Plus, Layers, Route as RouteIcon } from 'lucide-react';
 import { TerrainGridData } from '../types.js';
 import { STRUCTURE_KINDS, STRUCTURE_STYLE, StructureFeature, StructureKind, inDepthBand } from '../lib/structure.js';
 import { Waypoint } from '../lib/waypoints.js';
-import { buildGpx, downloadText } from '../lib/gpx.js';
+import { buildGpx, buildGpxTracks, downloadText } from '../lib/gpx.js';
+import { Route, routeLatLon, formatLength } from '../lib/routes.js';
 import type { ThermoclineBand } from './Lake3DViewer.js';
 import type { PickMode } from '../lib/overlays.js';
 
@@ -28,6 +29,11 @@ interface FishingPanelProps {
   onSetPickMode: (mode: PickMode) => void;
   useSurveyContours: boolean;
   onToggleSurveyContours: (on: boolean) => void;
+  routeDepthFt: number;
+  onRouteDepthChange: (ft: number) => void;
+  routes: Route[];
+  selectedRouteIds: string[];
+  onToggleRoute: (id: string) => void;
 }
 
 const PRESETS: Array<{ label: string; min: number; max: number; note: string }> = [
@@ -40,8 +46,9 @@ export const FishingPanel: React.FC<FishingPanelProps> = ({
   gridData, structure, hiddenKinds, onToggleKind, showStructure, onToggleStructure,
   thermocline, onThermoclineChange, waypoints, onUpdateWaypoints, onAddWaypointFromFeature,
   selectedId, onSelect, onFocus, pickMode, onSetPickMode, useSurveyContours, onToggleSurveyContours,
+  routeDepthFt, onRouteDepthChange, routes, selectedRouteIds, onToggleRoute,
 }) => {
-  const [section, setSection] = useState<'structure' | 'thermocline' | 'waypoints'>('structure');
+  const [section, setSection] = useState<'structure' | 'thermocline' | 'waypoints' | 'routes'>('structure');
   const maxDepthFt = Math.max(5, Math.ceil(gridData.maxDepth * FT_PER_M));
   const hasSurvey = !!gridData.surveyContours?.length;
 
@@ -69,6 +76,19 @@ export const FishingPanel: React.FC<FishingPanelProps> = ({
     const gpx = buildGpx({ lakeName: gridData.metadata.name, waypoints, structure: withStructure ? visible : [], bedElevationM });
     downloadText(`${slug}-${withStructure ? 'waypoints-structure' : 'waypoints'}.gpx`, gpx);
   };
+  const exportRoutes = () => {
+    const picked = routes.filter((r) => selectedRouteIds.includes(r.id));
+    if (!picked.length) return;
+    const bedM = gridData.waterElevation - routeDepthFt / FT_PER_M;
+    const gpx = buildGpxTracks(gridData.metadata.name, picked.map((r, i) => ({
+      name: `${gridData.metadata.name} ${r.depthFt} ft line ${i + 1}`,
+      desc: `${r.depthFt} ft contour, ${formatLength(r.lengthM)}${r.closed ? ', closed loop' : ''} (${r.source === 'survey' ? 'IDNR survey line' : 'grid contour'})`,
+      points: routeLatLon(gridData, r).map((p) => ({ ...p, elevM: bedM })),
+    })));
+    downloadText(`${slug}-${routeDepthFt}ft-routes.gpx`, gpx);
+  };
+  const interval = gridData.metadata.contourIntervalFt || 5;
+  const quickDepths = Array.from({ length: 6 }, (_, i) => interval * (i + 1)).filter((d) => d <= maxDepthFt);
   const rename = (id: string, name: string) => onUpdateWaypoints(waypoints.map((w) => (w.id === id ? { ...w, name } : w)));
   const remove = (id: string) => { onUpdateWaypoints(waypoints.filter((w) => w.id !== id)); if (selectedId === id) onSelect(null); };
 
@@ -104,6 +124,7 @@ export const FishingPanel: React.FC<FishingPanelProps> = ({
         {tab('structure', 'Structure', <Crosshair className="w-3.5 h-3.5" />, structure.length)}
         {tab('thermocline', 'Thermocline', <Thermometer className="w-3.5 h-3.5" />, thermocline.enabled ? inBand.length : undefined)}
         {tab('waypoints', 'Waypoints', <MapPin className="w-3.5 h-3.5" />, waypoints.length)}
+        {tab('routes', 'Routes', <RouteIcon className="w-3.5 h-3.5" />, selectedRouteIds.length || undefined)}
       </div>
 
       {section === 'structure' && (
@@ -221,6 +242,54 @@ export const FishingPanel: React.FC<FishingPanelProps> = ({
           )}
           <p className="text-[10px] text-slate-500 leading-relaxed">
             Where the thermocline actually sits changes week to week; these presets are starting points, not measurements. Check a temp probe on the water and drag the sliders to match.
+          </p>
+        </div>
+      )}
+
+      {section === 'routes' && (
+        <div className="space-y-2.5">
+          <div className="flex items-center gap-2 text-[11px] text-slate-300">
+            <span>Follow the</span>
+            <input
+              type="number"
+              min={1}
+              max={maxDepthFt}
+              step={1}
+              value={routeDepthFt}
+              onChange={(e) => onRouteDepthChange(Math.max(1, Math.min(maxDepthFt, Number(e.target.value) || 1)))}
+              className="w-16 bg-slate-950 border border-slate-700 rounded px-1.5 py-0.5 font-mono text-amber-300 focus:outline-none focus:border-amber-500"
+            />
+            <span>ft line</span>
+            <span className="ml-auto text-[10px] text-slate-500">{routes[0]?.source === 'survey' ? 'DNR survey line' : 'grid contour'}</span>
+          </div>
+          <div className="flex flex-wrap gap-1">
+            {quickDepths.map((d) => (
+              <button key={d} type="button" onClick={() => onRouteDepthChange(d)} className={`px-2 py-0.5 rounded-full text-[10px] font-mono border cursor-pointer ${routeDepthFt === d ? 'bg-amber-500/20 text-amber-200 border-amber-500/60' : 'bg-slate-800 text-slate-300 border-slate-700 hover:border-slate-600'}`}>{d} ft</button>
+            ))}
+          </div>
+          {routes.length === 0 ? (
+            <p className="text-[11px] text-slate-500">No {routeDepthFt} ft contour in this lake. Try a shallower depth.</p>
+          ) : (
+            <ul className="space-y-1 max-h-60 overflow-y-auto pr-1">
+              {routes.slice(0, 12).map((r, i) => {
+                const on = selectedRouteIds.includes(r.id);
+                return (
+                  <li key={r.id} className={`rounded-lg border px-2 py-1.5 text-[11px] flex items-center gap-2 transition ${on ? 'bg-slate-800 border-amber-500/60' : 'bg-slate-950/60 border-slate-800'}`}>
+                    <input type="checkbox" checked={on} onChange={() => onToggleRoute(r.id)} className="w-3.5 h-3.5 accent-amber-500 cursor-pointer" />
+                    <span className="font-semibold text-slate-100">Loop {i + 1}</span>
+                    <span className="font-mono text-amber-300">{formatLength(r.lengthM)}</span>
+                    <span className="text-[10px] text-slate-500">{r.closed ? 'closed' : 'open'} · {r.points.length} pts</span>
+                    <button type="button" title="Fly to it" onClick={() => onFocus(r.points[0][1], r.points[0][0])} className="ml-auto p-1 rounded hover:bg-slate-700 text-slate-300 cursor-pointer"><LocateFixed className="w-3 h-3" /></button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+          <button type="button" disabled={!selectedRouteIds.length} onClick={exportRoutes} className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold bg-amber-600 hover:bg-amber-500 text-white cursor-pointer disabled:opacity-40">
+            <Download className="w-3.5 h-3.5" /> GPX track{selectedRouteIds.length > 1 ? 's' : ''} ({selectedRouteIds.length})
+          </button>
+          <p className="text-[10px] text-slate-500 leading-relaxed">
+            Checked loops are drawn in amber on the model and the map. The GPX holds one track per loop; Humminbird, Lowrance and Garmin import tracks as trails you can steer along.
           </p>
         </div>
       )}

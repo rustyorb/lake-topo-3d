@@ -37,6 +37,8 @@ import { describeBathymetry, describeDem, describeGeometry, describeMethod } fro
 import { analyzeStructure, gridToLatLon, STRUCTURE_STYLE, StructureFeature, StructureKind } from './lib/structure.js';
 import { Waypoint, loadWaypoints, saveWaypoints, newWaypointId, nextWaypointName } from './lib/waypoints.js';
 import type { OverlayLine, PickMode } from './lib/overlays.js';
+import { contourRoutes } from './lib/routes.js';
+import { SectionChart } from './components/SectionChart.js';
 
 const FT_PER_M = 3.28084;
 const WAYPOINT_COLOR = 0xfacc15;
@@ -118,8 +120,12 @@ export default function App() {
   const [section, setSection] = useState<{ a: { row: number; col: number }; b: { row: number; col: number } | null } | null>(null);
   const [focusRequest, setFocusRequest] = useState<{ row: number; col: number; nonce: number } | null>(null);
   const [useSurveyContours, setUseSurveyContours] = useState<boolean>(true);
+  const [routeDepthFt, setRouteDepthFt] = useState<number>(10);
+  const [selectedRouteIds, setSelectedRouteIds] = useState<string[]>([]);
 
   const structure = useMemo<StructureFeature[]>(() => (gridData ? analyzeStructure(gridData) : []), [gridData]);
+  const routes = useMemo(() => (gridData ? contourRoutes(gridData, routeDepthFt, useSurveyContours) : []), [gridData, routeDepthFt, useSurveyContours]);
+  useEffect(() => setSelectedRouteIds([]), [gridData, routeDepthFt]);
   const lakeId = gridData?.metadata.id;
   useEffect(() => {
     setWaypoints(lakeId ? loadWaypoints(lakeId) : []);
@@ -176,8 +182,9 @@ export default function App() {
       for (let i = 0; i <= n; i++) pts.push([section.a.col + ((b.col - section.a.col) * i) / n, section.a.row + ((b.row - section.a.row) * i) / n]);
       out.push({ id: 'section', points: pts, color: '#f8fafc', dashed: true, endpoints: true });
     }
+    for (const r of routes) if (selectedRouteIds.includes(r.id)) out.push({ id: r.id, points: r.points, color: '#f59e0b' });
     return out;
-  }, [section]);
+  }, [section, routes, selectedRouteIds]);
 
   const visibleStructure = useMemo(() => (showStructure ? structure.filter((f) => !hiddenKinds.includes(f.kind)) : []), [structure, hiddenKinds, showStructure]);
   const markers3d = useMemo<ViewerMarker[]>(() => [
@@ -544,6 +551,19 @@ export default function App() {
               ) : null}
             </div>
 
+            {/* Cross-section between the two picked points */}
+            {gridData && section?.b && (
+              <SectionChart
+                data={gridData}
+                a={section.a}
+                b={section.b}
+                structure={visibleStructure}
+                thermocline={thermocline}
+                onSwap={() => setSection({ a: section.b!, b: section.a })}
+                onClear={() => setSection(null)}
+              />
+            )}
+
             {/* Quick Stats Bar Under Map */}
             {gridData && (
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -611,6 +631,11 @@ export default function App() {
                 onSetPickMode={setPickMode}
                 useSurveyContours={useSurveyContours}
                 onToggleSurveyContours={setUseSurveyContours}
+                routeDepthFt={routeDepthFt}
+                onRouteDepthChange={setRouteDepthFt}
+                routes={routes}
+                selectedRouteIds={selectedRouteIds}
+                onToggleRoute={(id) => setSelectedRouteIds((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]))}
               />
             )}
 

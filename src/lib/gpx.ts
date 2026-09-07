@@ -41,14 +41,39 @@ export function buildGpx(opts: GpxOptions): string {
   for (const f of opts.structure || []) {
     parts.push(wpt(f.lat, f.lon, opts.bedElevationM ? opts.bedElevationM(f) : null, `${f.label} ${f.depthFt} ft`, f.detail, 'Fishing Area', f.kind));
   }
+  return gpxDocument(opts.lakeName, parts, created);
+}
+
+function gpxDocument(lakeName: string, body: string[], created = new Date().toISOString()): string {
   return [
     `<?xml version="1.0" encoding="UTF-8"?>`,
     `<gpx version="1.1" creator="Lake Topo 3D" xmlns="http://www.topografix.com/GPX/1/1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd">`,
-    `  <metadata><name>${esc(opts.lakeName)}</name><time>${created}</time></metadata>`,
-    ...parts,
+    `  <metadata><name>${esc(lakeName)}</name><time>${created}</time></metadata>`,
+    ...body,
     `</gpx>`,
     '',
   ].join('\n');
+}
+
+export interface GpxTrack {
+  name: string;
+  desc?: string;
+  points: Array<{ lat: number; lon: number; elevM?: number }>;
+}
+
+/** One <trk> per route; sonar units import tracks as trails to steer along. */
+export function buildGpxTracks(lakeName: string, tracks: GpxTrack[]): string {
+  const body: string[] = [];
+  for (const t of tracks) {
+    body.push(`  <trk>`, `    <name>${esc(t.name)}</name>`);
+    if (t.desc) body.push(`    <desc>${esc(t.desc)}</desc>`);
+    body.push(`    <trkseg>`);
+    for (const p of t.points) {
+      body.push(`      <trkpt lat="${p.lat.toFixed(6)}" lon="${p.lon.toFixed(6)}">${p.elevM !== undefined ? `<ele>${p.elevM.toFixed(2)}</ele>` : ''}</trkpt>`);
+    }
+    body.push(`    </trkseg>`, `  </trk>`);
+  }
+  return gpxDocument(lakeName, body);
 }
 
 export function downloadText(filename: string, text: string, mime = 'application/gpx+xml'): void {

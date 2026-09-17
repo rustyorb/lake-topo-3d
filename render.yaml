@@ -1,0 +1,18 @@
+# Render blueprint: https://dashboard.render.com/blueprints -> New Blueprint Instance -> pick this repo
+services:
+  - type: web
+    name: lake-topo-3d
+    runtime: node
+    plan: free
+    buildCommand: npm install --include=dev && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: "22"
+      - key: TRUST_PROXY
+        value: "true"
+      - key: RATE_LIMIT_PER_MIN
+        value: "30"

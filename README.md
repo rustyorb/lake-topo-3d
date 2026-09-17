@@ -105,6 +105,15 @@ Heightfield + flat base + walls, verified closed manifold (`npm run verify`). +X
 
 See `.env.example`. Highlights: `PORT`, `LLM_PROVIDER` / `LLM_MODEL` / `LLM_BASE_URL`, `DEM_SOURCE` (`auto|3dep|terrarium`), `IDNR_DISABLED`, `WIKI_DISABLED`, `GEODATA_DISABLED`, `GEODATA_USER_AGENT` (Nominatim asks for a contact), `LAKE_CACHE_DIR`.
 
+## Hosting it publicly
+
+The app needs its Node server (it proxies and processes the geodata), so static hosts like GitHub Pages won't work. Any host that runs a Node process or a container will:
+
+- **Render (free)**: push the repo to GitHub, then Render dashboard → New → Blueprint → pick the repo. `render.yaml` holds the build/start commands and env. The free plan sleeps after 15 idle minutes; the first request after that takes up to a minute.
+- **Anything that takes a container** (Hugging Face Spaces, Cloud Run, Fly.io, Railway): use the `Dockerfile`. It listens on `PORT` (default 7860, which is what Spaces expects).
+
+Set `TRUST_PROXY=true` behind a reverse proxy so the per-IP rate limit (`RATE_LIMIT_PER_MIN`, default 30, `0` disables) sees real client addresses. Run a single instance: the Nominatim 1 req/s throttle is per process. Leave the LLM keys unset on a public deployment unless you are happy for strangers to spend them. The disk cache is ephemeral on free hosts, which only costs speed.
+
 ## API reference
 
 | Route | Method | Description |

@@ -13,11 +13,44 @@ function parseGrid(v: unknown, fallback = 72): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
+// Fixed-window per-IP limiter for public deployments; RATE_LIMIT_PER_MIN=0 turns it off
+function rateLimit(perMinute: number): express.RequestHandler {
+  const hits = new Map<string, { count: number; resetAt: number }>();
+  setInterval(() => {
+    const now = Date.now();
+    for (const [ip, h] of hits) if (h.resetAt <= now) hits.delete(ip);
+  }, 60_000).unref();
+  return (req, res, next) => {
+    if (perMinute <= 0) return next();
+    const now = Date.now();
+    const ip = req.ip || 'unknown';
+    let h = hits.get(ip);
+    if (!h || h.resetAt <= now) {
+      h = { count: 0, resetAt: now + 60_000 };
+      hits.set(ip, h);
+    }
+    if (++h.count > perMinute) {
+      res.setHeader('Retry-After', Math.ceil((h.resetAt - now) / 1000));
+      return res.status(429).json({ error: 'Too many requests, slow down a little.' });
+    }
+    next();
+  };
+}
+
 async function startServer() {
   const app = express();
   const basePort = parseInt(process.env.PORT || '3000', 10);
 
+  // Hosted behind one reverse proxy (Render, Fly, Cloud Run, HF Spaces): take the client IP from X-Forwarded-For
+  if (process.env.TRUST_PROXY === 'true') app.set('trust proxy', 1);
+
   app.use(express.json({ limit: '12mb' }));
+
+  const perMinute = parseInt(process.env.RATE_LIMIT_PER_MIN ?? '30', 10);
+  const limiter = rateLimit(Number.isFinite(perMinute) ? perMinute : 30);
+  for (const route of ['/api/lookup', '/api/lake-terrain', '/api/analyze-topo-image', '/api/ai-topo-recon', '/api/cache/clear']) {
+    app.use(route, limiter);
+  }
 
   app.get('/api/health', (_req, res) => {
     res.json({
